@@ -65,7 +65,8 @@ async function doctor() {
   }
   console.log('');
   console.log(`Experimentální API (${cloudApisEnabled(cfg) ? 'zapnuto' : 'vypnuto'}):`);
-  for (const name of API_KEY_NAMES) console.log(`  ${ok(cfg.keys[name])} ${name}`);
+  const configured = new Set(API_KEY_NAMES.filter((name) => cfg.keys[name]));
+  for (const name of API_KEY_NAMES) console.log(`  ${configured.has(name) ? '✓' : '✗'} ${name}`);
 }
 
 async function runSetup(args) {

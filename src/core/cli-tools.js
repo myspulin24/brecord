@@ -5,7 +5,7 @@
 const { spawn } = require('child_process');
 const path = require('path');
 const { expandHome } = require('./config');
-const { IS_WIN, isFile, killTree, run, start, tail, which } = require('./proc');
+const { IS_WIN, escapeCmdArg, invocation, isFile, killTree, run, start, tail, which } = require('./proc');
 
 const CLIS = {
   claude: {
@@ -141,6 +141,15 @@ async function logout(id, cfg) {
   if (r.code !== 0) throw new Error(tail(r.stderr || r.stdout, 4) || `exit ${r.code}`);
 }
 
+// Command line for a new console window: "start" hands it to a second
+// cmd.exe, so arguments go through two parsing passes, which escapeCmdArg's
+// double escaping is made for. npm's codex.cmd resolves to codex.exe.
+function windowsTerminalLine(bin, args, launcher = 'start "BRecord" cmd /d /k') {
+  const inv = invocation(bin, args);
+  const cmdline = inv.verbatim ? [bin, ...args] : [inv.command, ...inv.args];
+  return `${launcher} ${cmdline.map(escapeCmdArg).join(' ')}`;
+}
+
 // Fallback for login flows that insist on a real terminal.
 function openLoginInTerminal(id, cfg, mode) {
   const def = CLIS[id];
@@ -151,10 +160,10 @@ function openLoginInTerminal(id, cfg, mode) {
     const command = [bin, ...args].map(quote).join(' ').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
     spawn('osascript', ['-e', `tell application "Terminal" to do script "${command}"`, '-e', 'tell application "Terminal" to activate'], { detached: true, stdio: 'ignore' }).unref();
   } else if (IS_WIN) {
-    spawn(process.env.ComSpec || 'cmd.exe', ['/c', 'start', `Přihlášení ${def.label}`, 'cmd', '/k', bin, ...args], { detached: true, stdio: 'ignore', windowsHide: false }).unref();
+    spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"${windowsTerminalLine(bin, args)}"`], { detached: true, stdio: 'ignore', windowsHide: false, windowsVerbatimArguments: true }).unref();
   } else {
     spawn('x-terminal-emulator', ['-e', bin, ...args], { detached: true, stdio: 'ignore' }).unref();
   }
 }
 
-module.exports = { CLIS, QUIET_ENV, cliEnv, cliStatus, invalidate, logout, openLoginInTerminal, resolveCli, startLogin };
+module.exports = { CLIS, QUIET_ENV, cliEnv, cliStatus, invalidate, logout, openLoginInTerminal, resolveCli, startLogin, windowsTerminalLine };

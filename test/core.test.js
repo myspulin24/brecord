@@ -308,3 +308,39 @@ test('WASAPI loopback helper compiles and lists outputs', { skip: process.platfo
     t.diagnostic(`listOutputs: ${err.message}`);
   }
 });
+
+test('whisper.cpp release data from GitHub is validated before use', async (t) => {
+  const setup = require('../src/core/setup');
+  const realFetch = global.fetch;
+  t.after(() => (global.fetch = realFetch));
+  const reply = (releases) => {
+    global.fetch = async () => ({ ok: true, json: async () => releases });
+  };
+  const good = 'https://github.com/ggml-org/whisper.cpp/releases/download/b5130/whisper-bin-x64.zip';
+  reply([{ tag_name: 'b5130', assets: [{ name: 'whisper-bin-x64.zip', browser_download_url: good, size: 1 }] }]);
+  assert.deepEqual(await setup.findReleaseAsset('whisper-bin-x64.zip'), { url: good, tag: 'b5130', size: 1 });
+  reply([{ tag_name: '../../evil', assets: [{ name: 'whisper-bin-x64.zip', browser_download_url: good }] }]);
+  await assert.rejects(setup.findReleaseAsset('whisper-bin-x64.zip'), /Neočekávaný název/);
+  reply([{ tag_name: 'b5130', assets: [{ name: 'whisper-bin-x64.zip', browser_download_url: 'https://evil.example/whisper-bin-x64.zip' }] }]);
+  await assert.rejects(setup.findReleaseAsset('whisper-bin-x64.zip'), /Neočekávaná adresa/);
+});
+
+test('terminal login command survives both cmd.exe passes', { skip: process.platform !== 'win32' }, async () => {
+  const { spawn } = require('node:child_process');
+  const { windowsTerminalLine } = require('../src/core/cli-tools');
+  const dir = path.join(TMP, 'term & dir (x)');
+  fs.mkdirSync(dir, { recursive: true });
+  const script = path.join(dir, 'argv.js');
+  fs.writeFileSync(script, 'process.stdout.write(JSON.stringify(process.argv.slice(2)))');
+  const args = [script, 'auth', 'login', 'a b', 'x&y|z', '100%', 'q"uote', '!bang!'];
+  // Same two parsing passes as "start ... cmd /k", without opening a window.
+  const line = windowsTerminalLine(process.execPath, args, 'cmd /d /c');
+  const out = await new Promise((resolve, reject) => {
+    const child = spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"${line}"`], { windowsVerbatimArguments: true, windowsHide: true });
+    let s = '';
+    child.stdout.on('data', (d) => (s += d));
+    child.on('error', reject);
+    child.on('close', () => resolve(s));
+  });
+  assert.deepEqual(JSON.parse(out), args.slice(1));
+});

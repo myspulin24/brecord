@@ -139,8 +139,15 @@ function listNotes(dir, { limit = 200 } = {}) {
   for (const name of names) {
     const file = path.join(dir, name);
     try {
-      const stat = fs.statSync(file);
-      const md = fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
+      const fd = fs.openSync(file, 'r');
+      let stat;
+      let md;
+      try {
+        stat = fs.fstatSync(fd);
+        md = fs.readFileSync(fd, 'utf8').replace(/\r\n/g, '\n');
+      } finally {
+        fs.closeSync(fd);
+      }
       const title = ((md.match(/^# (.+)$/m) || [])[1] || name.slice(0, -3)).trim();
       const m = md.match(/\*\*(\d{4}-\d{2}-\d{2}) · (\d{2}):(\d{2})–(\d{2}:\d{2}) · ([^*]+)\*\*/);
       const base = name.slice(0, -3);

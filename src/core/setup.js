@@ -67,6 +67,8 @@ async function installModel(name, { onProgress, signal } = {}) {
 
 // whisper.cpp publishes Windows zips on its per-build releases, so walk back
 // until one has the asset we want.
+const RELEASE_DOWNLOADS = 'https://github.com/ggml-org/whisper.cpp/releases/download/';
+
 async function findReleaseAsset(assetName) {
   const res = await fetch('https://api.github.com/repos/ggml-org/whisper.cpp/releases?per_page=20', {
     headers: { 'user-agent': 'brecord-setup', accept: 'application/vnd.github+json' },
@@ -74,7 +76,15 @@ async function findReleaseAsset(assetName) {
   if (!res.ok) throw new Error(`GitHub API vrátilo HTTP ${res.status}`);
   for (const release of await res.json()) {
     const asset = (release.assets || []).find((a) => a.name === assetName);
-    if (asset) return { url: asset.browser_download_url, tag: release.tag_name, size: asset.size };
+    if (!asset) continue;
+    // The tag becomes a folder name under ~/.brecord/whisper that setup
+    // replaces, and the URL is downloaded: accept only what whisper.cpp
+    // publishes, never "../" or another host.
+    const tag = String(release.tag_name || '');
+    const url = String(asset.browser_download_url || '');
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(tag) || tag.includes('..')) throw new Error(`Neočekávaný název vydání whisper.cpp: ${tag}`);
+    if (!url.startsWith(`${RELEASE_DOWNLOADS}${tag}/`)) throw new Error(`Neočekávaná adresa ke stažení: ${url}`);
+    return { url, tag, size: asset.size };
   }
   throw new Error(`Žádné vydání whisper.cpp neobsahuje ${assetName}`);
 }
@@ -153,4 +163,4 @@ async function installWhisperBinary(opts = {}) {
   throw new Error('Sestavte whisper.cpp z https://github.com/ggml-org/whisper.cpp a nastavte jeho cestu v Nastavení');
 }
 
-module.exports = { MODELS, download, installModel, installWhisperBinary, modelUrl };
+module.exports = { MODELS, download, findReleaseAsset, installModel, installWhisperBinary, modelUrl };

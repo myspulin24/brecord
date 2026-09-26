@@ -66,10 +66,21 @@ function logError(kind, err) {
 // Plain log lines (updater progress etc.); the file is capped at ~1 MB.
 function logLine(tag, message) {
   try {
-    const file = path.join(config.HOME, 'brecord.log');
-    if (fs.existsSync(file) && fs.statSync(file).size > 1024 * 1024) fs.renameSync(file, `${file}.1`);
     fs.mkdirSync(config.HOME, { recursive: true });
-    fs.appendFileSync(file, `${new Date().toISOString()} ${tag}: ${message}\n`);
+    const fd = fs.openSync(path.join(config.HOME, 'brecord.log'), 'a+');
+    try {
+      // Over 1 MB: keep only the newest 256 kB.
+      const { size } = fs.fstatSync(fd);
+      if (size > 1024 * 1024) {
+        const keep = Buffer.alloc(256 * 1024);
+        const n = fs.readSync(fd, keep, 0, keep.length, size - keep.length);
+        fs.ftruncateSync(fd, 0);
+        fs.writeSync(fd, keep.subarray(0, n), 0, n, 0);
+      }
+      fs.writeSync(fd, `${new Date().toISOString()} ${tag}: ${message}\n`);
+    } finally {
+      fs.closeSync(fd);
+    }
   } catch {
     // nowhere to log
   }
