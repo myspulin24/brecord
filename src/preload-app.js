@@ -1,0 +1,46 @@
+'use strict';
+const { contextBridge, ipcRenderer } = require('electron');
+
+const invoke = (channel, ...args) => ipcRenderer.invoke(channel, ...args);
+const EVENTS = ['state', 'settings', 'levels', 'navigate', 'toast', 'notes:changed', 'cli:login-output', 'cli:login-exit', 'setup:progress'];
+
+contextBridge.exposeInMainWorld('brecord', {
+  platform: process.platform,
+  getState: () => invoke('app:state'),
+  save: (patch) => invoke('settings:save', patch),
+  cliStatus: (fresh) => invoke('status:clis', fresh),
+  localStatus: () => invoke('status:local'),
+  login: (id, mode, secret) => invoke('cli:login', id, mode, secret),
+  loginInput: (id, text) => invoke('cli:login-input', id, text),
+  loginCancel: (id) => invoke('cli:login-cancel', id),
+  logout: (id) => invoke('cli:logout', id),
+  loginInTerminal: (id, mode) => invoke('cli:terminal', id, mode),
+  testProvider: (id) => invoke('provider:test', id),
+  setKey: (name, value) => invoke('keys:set', name, value),
+  chooseFolder: (current) => invoke('dialog:folder', current),
+  chooseFile: (current) => invoke('dialog:file', current),
+  installWhisper: (opts) => invoke('whisper:install', opts),
+  refreshDevices: () => invoke('devices:refresh'),
+  toggleRecording: () => invoke('recording:toggle'),
+  monitorStart: (deviceId) => invoke('monitor:start', deviceId),
+  monitorStop: () => invoke('monitor:stop'),
+  permissions: () => invoke('permissions:status'),
+  requestMicrophone: () => invoke('permissions:request-mic'),
+  listNotes: (limit) => invoke('notes:list', limit),
+  openNote: (file) => invoke('notes:open', file),
+  revealNote: (file) => invoke('notes:reveal', file),
+  openNotesFolder: () => invoke('notes:folder'),
+  processFile: () => invoke('notes:process-file'),
+  resummarize: (file) => invoke('notes:resummarize', file),
+  openPath: (p) => invoke('open:path', p),
+  openUrl: (url) => invoke('open:url', url),
+  setLoginItem: (on) => invoke('app:login-item', on),
+  quit: () => invoke('app:quit'),
+  checkUpdate: () => invoke('update:check'),
+  downloadUpdate: () => invoke('update:download'),
+  installUpdate: () => invoke('update:install'),
+  openRelease: (url) => invoke('update:open', url),
+  on: (channel, cb) => {
+    if (EVENTS.includes(channel)) ipcRenderer.on(channel, (_e, data) => cb(data));
+  },
+});

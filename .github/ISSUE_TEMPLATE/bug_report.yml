@@ -1,0 +1,32 @@
+name: Chyba
+description: Něco nefunguje, jak má.
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Verze BRecord
+      description: Najdete ji v Nastavení → Obecné → Aktualizace.
+      placeholder: 0.3.0
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Systém
+      options: [Windows, macOS (Apple Silicon), macOS (Intel), Linux]
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: Co se stalo
+      description: Co jste udělali, co se mělo stát a co se stalo místo toho.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Záznam
+      description: Pokud existuje, přiložte konec souboru `~/.brecord/brecord.log`.
+      render: text

@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="cs">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:" />
+    <title>BRecord</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <!-- Sidebar -------------------------------------------------------- -->
+      <aside class="sidebar">
+        <div class="sidebar-top drag">
+          <div class="brand">
+            <div class="brand-mark"></div>
+            <div class="brand-name">BRecord</div>
+          </div>
+        </div>
+        <nav class="nav" id="nav">
+          <div class="nav-indicator" id="nav-indicator"></div>
+          <button class="nav-item" data-page="home"><i data-icon="home"></i><span>Domů</span></button>
+          <button class="nav-item" data-page="notes"><i data-icon="notes"></i><span>Poznámky</span><em class="nav-count" id="notes-count"></em></button>
+          <div class="nav-label">Nastavení</div>
+          <button class="nav-item" data-page="ai"><i data-icon="sparkles"></i><span>AI shrnutí</span></button>
+          <button class="nav-item" data-page="transcription"><i data-icon="wave"></i><span>Přepis</span></button>
+          <button class="nav-item" data-page="audio"><i data-icon="headphones"></i><span>Zvuk a oprávnění</span></button>
+          <button class="nav-item" data-page="general"><i data-icon="sliders"></i><span>Obecné</span></button>
+          <button class="nav-item" data-page="experimental"><i data-icon="flask"></i><span>Experimentální</span><em class="beta-tag">BETA</em></button>
+        </nav>
+        <div class="sidebar-foot">
+          <button class="mini-rec" id="mini-rec" hidden>
+            <span class="mini-rec-dot"></span>
+            <span class="mini-rec-text">Nahrávám</span>
+            <span class="mini-rec-time" id="mini-rec-time">0:00</span>
+          </button>
+          <button class="update-chip" id="update-chip" hidden>
+            <i data-icon="download"></i>
+            <span class="update-chip-text"><b id="update-chip-title">Nová verze</b><span id="update-chip-sub"></span></span>
+          </button>
+          <div class="app-version" id="app-version"></div>
+        </div>
+      </aside>
+
+      <!-- Main ------------------------------------------------------------- -->
+      <main class="main">
+        <header class="topbar drag">
+          <div class="topbar-title">
+            <h1 id="page-title">Domů</h1>
+            <p id="page-subtitle"></p>
+          </div>
+          <div class="topbar-actions no-drag" id="topbar-actions"></div>
+        </header>
+
+        <div class="pages" id="pages">
+          <!-- Home -->
+          <section class="page" data-page="home" data-title="Domů" data-subtitle="Nahrávejte schůzky, BRecord je přepíše a shrne.">
+            <div class="page-inner stagger">
+              <div class="hero" id="hero">
+                <div class="hero-aurora"><span class="blob b1"></span><span class="blob b2"></span><span class="blob b3"></span></div>
+                <div class="hero-status" id="hero-status"><span class="status-dot"></span><span id="hero-status-text">Připraveno k nahrávání</span></div>
+                <button class="rec-btn" id="rec-btn" aria-label="Spustit nahrávání">
+                  <span class="rec-spinner"></span>
+                  <span class="rec-ring"></span><span class="rec-ring"></span><span class="rec-ring"></span>
+                  <span class="rec-halo" id="rec-halo"></span>
+                  <span class="rec-core"></span>
+                </button>
+                <div class="timer" id="timer">00:00</div>
+                <div class="hero-hint" id="hero-hint">Klikněte pro spuštění nahrávání</div>
+                <div class="device-row">
+                  <button class="device-pill" id="pill-mic" data-kind="mic">
+                    <span class="device-icon"><i data-icon="mic"></i></span>
+                    <span class="device-text"><span class="device-label">Vstup · mikrofon</span><span class="device-name" id="mic-name">Výchozí mikrofon</span></span>
+                    <canvas class="meter" id="meter-mic" width="112" height="44"></canvas>
+                    <i class="chev" data-icon="chevronDown"></i>
+                  </button>
+                  <button class="device-pill" id="pill-out" data-kind="out">
+                    <span class="device-icon out"><i data-icon="speaker"></i></span>
+                    <span class="device-text"><span class="device-label">Výstup · systémový zvuk</span><span class="device-name" id="out-name">Výchozí výstup</span></span>
+                    <canvas class="meter" id="meter-out" width="112" height="44"></canvas>
+                    <i class="chev" data-icon="chevronDown"></i>
+                  </button>
+                </div>
+              </div>
+
+              <div class="warnings" id="rec-warnings"></div>
+
+              <div class="quick-row" id="quick-row">
+                <button class="quick-chip" id="chip-ai"><i data-icon="sparkles"></i><span class="qc-label">Shrnutí</span><span class="qc-value" id="chip-ai-value">…</span></button>
+                <button class="quick-chip" id="chip-model"><i data-icon="wave"></i><span class="qc-label">Přepis</span><span class="qc-value" id="chip-model-value">…</span></button>
+                <button class="quick-chip" id="chip-lang"><i data-icon="globe"></i><span class="qc-label">Jazyk schůzky</span><span class="qc-value" id="chip-lang-value">…</span></button>
+                <button class="quick-chip" id="chip-notes-lang"><i data-icon="notes"></i><span class="qc-label">Poznámky</span><span class="qc-value" id="chip-notes-lang-value">…</span></button>
+              </div>
+
+              <div class="card jobs-card" id="jobs-card" hidden>
+                <div class="card-head"><h2>Zpracování</h2></div>
+                <div class="jobs" id="jobs"></div>
+              </div>
+
+              <div class="card">
+                <div class="card-head">
+                  <h2>Nedávné poznámky</h2>
+                  <button class="btn btn-ghost btn-sm" data-go="notes">Zobrazit vše<i data-icon="chevronRight"></i></button>
+                </div>
+                <div class="note-list" id="recent-notes"></div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Notes -->
+          <section class="page" data-page="notes" data-title="Poznámky" data-subtitle="Všechny zápisy ze schůzek na jednom místě.">
+            <div class="page-inner stagger">
+              <div class="toolbar">
+                <label class="search"><i data-icon="search"></i><input type="text" id="notes-search" placeholder="Hledat v názvech a shrnutích" /></label>
+                <div class="segmented" id="notes-filter"></div>
+              </div>
+              <div class="card card-flush"><div class="note-list big" id="all-notes"></div></div>
+            </div>
+          </section>
+
+          <!-- AI -->
+          <section class="page" data-page="ai" data-title="AI shrnutí" data-subtitle="Kdo po nahrávce sepíše shrnutí, rozhodnutí a úkoly.">
+            <div class="page-inner stagger">
+              <div class="card">
+                <div class="field">
+                  <div class="field-text"><div class="field-label">Poskytovatel</div><div class="field-hint">Automaticky použije první dostupný: Claude Code → Codex → Ollama.</div></div>
+                  <div class="segmented" id="seg-provider"></div>
+                </div>
+                <div class="divider"></div>
+                <div class="field">
+                  <div class="field-text"><div class="field-label">Když selže</div><div class="field-hint">Záložní poskytovatel pro případ chyby nebo výpadku.</div></div>
+                  <div class="segmented" id="seg-fallback"></div>
+                </div>
+                <div class="plan-line" id="plan-line"><span class="plan-dot"></span><span id="plan-text">Zjišťuji…</span></div>
+              </div>
+              <div id="cli-cards" class="cli-cards"></div>
+              <div class="card" id="card-ollama">
+                <div class="card-head">
+                  <div class="head-with-icon"><span class="logo-tile ollama"><i data-icon="cpu"></i></span><div><h2>Ollama</h2><p class="muted">Lokální model, funguje i offline. Nainstalujte z ollama.com.</p></div></div>
+                  <span class="status-pill" id="ollama-status"><span class="dot"></span>Zjišťuji</span>
+                </div>
+                <div class="grid-2">
+                  <label class="input-field"><span>Server</span><input type="text" data-setting="summary.ollama.host" placeholder="http://127.0.0.1:11434" /></label>
+                  <label class="input-field"><span>Model</span><button class="select" id="ollama-model"></button></label>
+                </div>
+                <div class="actions"><button class="btn btn-soft" data-test="ollama"><i data-icon="zap"></i>Otestovat</button></div>
+                <div class="test-result" data-result="ollama"></div>
+              </div>
+              <p class="footnote"><i data-icon="flask"></i>Shrnutí přes API (Anthropic, OpenAI, Groq) najdete v sekci <a href="#" data-go="experimental">Experimentální</a>.</p>
+            </div>
+          </section>
+
+          <!-- Transcription -->
+          <section class="page" data-page="transcription" data-title="Přepis" data-subtitle="Převod řeči na text běží přímo ve vašem počítači.">
+            <div class="page-inner stagger">
+              <div class="card">
+                <div class="card-head">
+                  <div class="head-with-icon"><span class="logo-tile whisper"><i data-icon="wave"></i></span><div><h2>whisper.cpp</h2><p class="muted" id="whisper-path">Zjišťuji…</p></div></div>
+                  <span class="status-pill" id="whisper-status"><span class="dot"></span>Zjišťuji</span>
+                </div>
+                <div class="actions" id="whisper-actions">
+                  <div class="segmented small win-only" id="seg-variant"></div>
+                  <button class="btn btn-soft" id="install-binary"><i data-icon="download"></i><span>Nainstalovat whisper.cpp</span></button>
+                </div>
+                <div class="progress-block" id="setup-progress" hidden>
+                  <div class="progress"><div class="progress-fill"></div></div>
+                  <div class="progress-text"><span id="setup-label"></span><span id="setup-value"></span></div>
+                </div>
+              </div>
+              <div class="card">
+                <div class="card-head"><div><h2>Model</h2><p class="muted">Větší model přepisuje přesněji, ale pomaleji.</p></div></div>
+                <div class="model-grid" id="model-grid"></div>
+              </div>
+              <div class="card">
+                <div class="field">
+                  <div class="field-text"><div class="field-label">Jazyk schůzky</div><div class="field-hint">Pevně zvolený jazyk je spolehlivější než automatická detekce.</div></div>
+                  <button class="select" id="sel-language"></button>
+                </div>
+                <div class="divider"></div>
+                <div class="field top">
+                  <div class="field-text"><div class="field-label">Slovník</div><div class="field-hint">Jména, produkty a zkratky, které se mají přepsat správně.</div></div>
+                  <textarea class="textarea" rows="3" data-setting="transcription.prompt" placeholder="Např. Petra Nováková, Acme, Kubernetes, OKR"></textarea>
+                </div>
+                <div class="divider"></div>
+                <div class="field">
+                  <div class="field-text"><div class="field-label">Vlákna procesoru</div><div class="field-hint">Automaticky volí podle počtu jader.</div></div>
+                  <div class="stepper" id="threads-stepper">
+                    <button class="stepper-btn" data-step="-1" aria-label="Méně">−</button>
+                    <span class="stepper-value" id="threads-value">Auto</span>
+                    <button class="stepper-btn" data-step="1" aria-label="Více">+</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Audio -->
+          <section class="page" data-page="audio" data-title="Zvuk a oprávnění" data-subtitle="Co se nahrává a z jakých zařízení.">
+            <div class="page-inner stagger">
+              <div class="card">
+                <div class="card-head"><div><h2>Oprávnění</h2><p class="muted">Bez přístupu k mikrofonu se nahraje jen zvuk z počítače.</p></div></div>
+                <div class="perm-list" id="perm-list"></div>
+              </div>
+              <div class="card">
+                <div class="card-head">
+                  <div><h2>Vstup · mikrofon</h2><p class="muted">Váš hlas, v poznámkách jako „Já“. Mluvte a sledujte ukazatel.</p></div>
+                  <canvas class="meter meter-lg" id="meter-audio" width="176" height="56"></canvas>
+                </div>
+                <div class="option-list" id="mic-list"></div>
+              </div>
+              <div class="card">
+                <div class="card-head">
+                  <div><h2>Výstup · systémový zvuk</h2><p class="muted" id="output-hint"></p></div>
+                  <button class="btn btn-ghost btn-sm" id="refresh-devices"><i data-icon="refresh"></i>Obnovit</button>
+                </div>
+                <div class="option-list" id="out-list"></div>
+              </div>
+              <div class="card mac-only">
+                <div class="field">
+                  <div class="field-text"><div class="field-label">Způsob nahrávání systémového zvuku</div><div class="field-hint">Změna se projeví po restartu BRecord.</div></div>
+                  <div class="segmented small" id="seg-mac-capture"></div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- General -->
+          <section class="page" data-page="general" data-title="Obecné" data-subtitle="Vzhled, poznámky a chování aplikace.">
+            <div class="page-inner stagger">
+              <div class="card">
+                <div class="field">
+                  <div class="field-text"><div class="field-label">Složka s poznámkami</div><div class="field-hint mono" id="notes-dir-text"></div></div>
+                  <div class="btn-group"><button class="btn btn-soft btn-sm" id="choose-notes">Změnit</button><button class="btn btn-ghost btn-sm" id="open-notes"><i data-icon="folder"></i>Otevřít</button></div>
+                </div>
+                <div class="divider"></div>
+                <div class="field">
+                  <div class="field-text"><div class="field-label">Vaše jméno</div><div class="field-hint">Použije se jako vlastník vašich úkolů.</div></div>
+                  <input class="input" type="text" data-setting="myName" placeholder="Např. Michal" />
+                </div>
+                <div class="divider"></div>
+                <div class="field">
+                  <div class="field-text"><div class="field-label">Jazyk poznámek</div><div class="field-hint">V jakém jazyce se píše shrnutí.</div></div>
+                  <button class="select" id="sel-notes-language"></button>
+                </div>
+              </div>
+              <div class="card">
+                <div class="field">
+                  <div class="field-text"><div class="field-label">Vzhled</div></div>
+                  <div class="segmented" id="seg-theme"></div>
+                </div>
+                <div class="divider"></div>
+                <div class="field">
+                  <div class="field-text"><div class="field-label">Po dokončení otevřít poznámku</div><div class="field-hint">Hotový zápis se otevře ve výchozím editoru.</div></div>
+                  <button class="toggle" data-toggle="openNoteWhenDone"><span></span></button>
+                </div>
+                <div class="divider"></div>
+                <div class="field">
+                  <div class="field-text"><div class="field-label">Oznámení</div><div class="field-hint">Upozornění na hotové poznámky a problémy se zvukem.</div></div>
+                  <button class="toggle" data-toggle="notifications"><span></span></button>
+                </div>
+                <div class="divider"></div>
+                <div class="field">
+                  <div class="field-text"><div class="field-label">Klávesová zkratka</div><div class="field-hint"><kbd id="shortcut-kbd">Ctrl</kbd> spustí a zastaví nahrávání odkudkoli.</div></div>
+                  <button class="toggle" data-toggle="globalShortcut"><span></span></button>
+                </div>
+                <div class="divider"></div>
+                <div class="field" id="login-item-field">
+                  <div class="field-text"><div class="field-label">Spouštět po přihlášení</div><div class="field-hint" id="login-item-hint">BRecord se spustí na pozadí v oznamovací oblasti.</div></div>
+                  <button class="toggle" id="login-item"><span></span></button>
+                </div>
+              </div>
+              <div class="card" id="update-card">
+                <div class="card-head">
+                  <div class="head-with-icon"><span class="logo-tile update"><i data-icon="download"></i></span><div><h2>Aktualizace</h2><p class="muted" id="update-sub"></p></div></div>
+                  <span class="status-pill" id="update-status"><span class="dot"></span><span class="st">…</span></span>
+                </div>
+                <div id="update-body"></div>
+                <div class="divider"></div>
+                <div class="field">
+                  <div class="field-text"><div class="field-label">Kontrolovat aktualizace</div><div class="field-hint">Při spuštění a pak každé čtyři hodiny se podívá na GitHub.</div></div>
+                  <button class="toggle" data-toggle="updateChecks"><span></span></button>
+                </div>
+                <div class="divider"></div>
+                <div class="field" id="auto-update-field">
+                  <div class="field-text"><div class="field-label">Stahovat a instalovat automaticky</div><div class="field-hint" id="auto-update-hint">Nová verze se stáhne na pozadí a nainstaluje při ukončení.</div></div>
+                  <button class="toggle" data-toggle="autoUpdate"><span></span></button>
+                </div>
+                <div class="about-line" id="about-line"></div>
+              </div>
+              <div class="card">
+                <div class="card-head"><div class="head-with-icon"><span class="logo-tile privacy"><i data-icon="shield"></i></span><div><h2>Soukromí</h2><p class="muted">Bez účtů, bez cloudového úložiště, bez telemetrie.</p></div></div></div>
+                <p class="body-text">Zvuk i poznámky zůstávají ve vaší složce. Ven odchází jen text přepisu k poskytovateli shrnutí, kterého zvolíte (s Ollamou nic). Když BRecord spouští Claude Code nebo Codex, vypíná jim historii relací i telemetrii. Jediné spojení, které BRecord navazuje sám, je kontrola aktualizací na GitHubu.</p>
+                <div class="facts" id="paths"></div>
+              </div>
+              <div class="actions end"><button class="btn btn-ghost" id="quit-app"><i data-icon="power"></i>Ukončit BRecord</button></div>
+            </div>
+          </section>
+
+          <!-- Experimental -->
+          <section class="page" data-page="experimental" data-title="Experimentální funkce" data-subtitle="Připravujeme a testujeme.">
+            <div class="page-inner stagger">
+              <div class="beta-banner">
+                <span class="beta-icon"><i data-icon="flask"></i></span>
+                <div><div class="beta-title">Tyto funkce právě testujeme</div><div class="beta-text">Zatím nejsou k dispozici. Jakmile budou připravené, zpřístupníme je v další verzi.</div></div>
+                <span class="beta-tag big">BETA</span>
+              </div>
+              <div class="card is-disabled" aria-disabled="true">
+                <div class="soon-ribbon">Připravujeme</div>
+                <div class="card-head"><div class="head-with-icon"><span class="logo-tile"><i data-icon="cloud"></i></span><div><h2>Cloudový přepis</h2><p class="muted">OpenAI Whisper a Groq pro rychlejší přepis dlouhých schůzek.</p></div></div></div>
+                <div class="grid-2">
+                  <label class="input-field"><span>Groq model</span><input type="text" value="whisper-large-v3-turbo" disabled /></label>
+                  <label class="input-field"><span>OpenAI model</span><input type="text" value="whisper-1" disabled /></label>
+                </div>
+              </div>
+              <div class="card is-disabled" aria-disabled="true">
+                <div class="soon-ribbon">Připravujeme</div>
+                <div class="card-head"><div class="head-with-icon"><span class="logo-tile"><i data-icon="sparkles"></i></span><div><h2>Shrnutí přes API</h2><p class="muted">Anthropic, OpenAI a Groq s placeným API klíčem.</p></div></div></div>
+                <div class="grid-3">
+                  <label class="input-field"><span>Anthropic</span><input type="text" value="claude-opus-5" disabled /></label>
+                  <label class="input-field"><span>OpenAI</span><input type="text" value="gpt-5-mini" disabled /></label>
+                  <label class="input-field"><span>Groq</span><input type="text" value="openai/gpt-oss-120b" disabled /></label>
+                </div>
+              </div>
+              <div class="card is-disabled" aria-disabled="true">
+                <div class="soon-ribbon">Připravujeme</div>
+                <div class="card-head"><div class="head-with-icon"><span class="logo-tile"><i data-icon="key"></i></span><div><h2>API klíče</h2><p class="muted">Uloží se lokálně do souboru .env.</p></div></div></div>
+                <div class="key-rows">
+                  <label class="input-field"><span>ANTHROPIC_API_KEY</span><input type="password" placeholder="sk-ant-…" disabled /></label>
+                  <label class="input-field"><span>OPENAI_API_KEY</span><input type="password" placeholder="sk-…" disabled /></label>
+                  <label class="input-field"><span>GROQ_API_KEY</span><input type="password" placeholder="gsk_…" disabled /></label>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <!-- Overlays -->
+    <div class="popover-layer" id="popover-layer"></div>
+    <div class="toasts" id="toasts"></div>
+
+    <div class="onboarding" id="onboarding" hidden>
+      <div class="ob-backdrop"></div>
+      <div class="ob-card">
+        <div class="ob-progress" id="ob-progress"><span></span><span></span><span></span><span></span></div>
+        <div class="ob-viewport">
+          <div class="ob-track" id="ob-track">
+            <!-- 0: welcome -->
+            <div class="ob-step">
+              <div class="ob-hero-mark"><span class="ob-ring"></span><span class="ob-ring"></span><div class="brand-mark xl"></div></div>
+              <h2 class="ob-title">Vítejte v BRecord</h2>
+              <p class="ob-text">Nahrajte schůzku jedním kliknutím. BRecord ji přepíše a sepíše shrnutí, rozhodnutí a úkoly.</p>
+              <div class="ob-features">
+                <div class="ob-feature"><span class="ob-fi"><i data-icon="mic"></i></span><div><b>Mikrofon i zvuk počítače</b><span>Vy i ostatní účastníci v jedné nahrávce</span></div></div>
+                <div class="ob-feature"><span class="ob-fi"><i data-icon="shield"></i></span><div><b>Přepis ve vašem počítači</b><span>Zvuk nikam neodchází</span></div></div>
+                <div class="ob-feature"><span class="ob-fi"><i data-icon="sparkles"></i></span><div><b>Shrnutí přes Claude Code nebo Codex</b><span>Bez API klíčů, s vaším předplatným</span></div></div>
+              </div>
+              <div class="ob-actions"><button class="btn btn-primary btn-lg" data-ob-next>Začít<i data-icon="chevronRight"></i></button></div>
+            </div>
+            <!-- 1: microphone -->
+            <div class="ob-step">
+              <div class="ob-perm-icon" id="ob-perm-icon"><span class="ob-pulse"></span><i data-icon="mic"></i></div>
+              <h2 class="ob-title">Povolte přístup k mikrofonu</h2>
+              <p class="ob-text">BRecord nahrává váš hlas jen tehdy, když sami spustíte nahrávání.</p>
+              <div class="ob-perm-result" id="ob-perm-result"></div>
+              <div class="ob-actions">
+                <button class="btn btn-ghost btn-lg" id="ob-skip" data-ob-next>Přeskočit</button>
+                <button class="btn btn-primary btn-lg" id="ob-mic-btn"><i data-icon="mic"></i><span>Povolit mikrofon</span></button>
+              </div>
+            </div>
+            <!-- 2: devices -->
+            <div class="ob-step">
+              <h2 class="ob-title">Vyberte vstup a výstup</h2>
+              <p class="ob-text">Mikrofon pro váš hlas a výstup, přes který slyšíte ostatní. U Teams a Zoomu obvykle komunikační zařízení nebo sluchátka.</p>
+              <div class="ob-devices">
+                <div class="ob-dev-col"><div class="ob-dev-head"><i data-icon="mic"></i>Vstup<canvas class="meter" id="meter-ob" width="112" height="44"></canvas></div><div class="option-list compact" id="ob-mic-list"></div></div>
+                <div class="ob-dev-col"><div class="ob-dev-head"><i data-icon="speaker"></i>Výstup</div><div class="option-list compact" id="ob-out-list"></div></div>
+              </div>
+              <div class="ob-actions"><button class="btn btn-primary btn-lg" data-ob-next>Pokračovat<i data-icon="chevronRight"></i></button></div>
+            </div>
+            <!-- 3: AI -->
+            <div class="ob-step">
+              <h2 class="ob-title">Kdo sepíše shrnutí?</h2>
+              <p class="ob-text">BRecord použije Claude Code nebo Codex, do kterých jste přihlášeni. Přihlásit se můžete i později v Nastavení.</p>
+              <div class="ob-cli" id="ob-cli"></div>
+              <div class="ob-actions"><button class="btn btn-primary btn-lg" id="ob-finish">Hotovo, jdeme nahrávat<i data-icon="check"></i></button></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="icons.js"></script>
+    <script src="logo.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Bezpečnostní chyba
+    url: https://github.com/myspulin24/brecord/security/advisories/new
+    about: Nahlaste ji soukromě, ne jako veřejný issue.

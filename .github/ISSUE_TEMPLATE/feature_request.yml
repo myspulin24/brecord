@@ -1,0 +1,15 @@
+name: Návrh
+description: Nápad na novou funkci nebo zlepšení.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Co by to vyřešilo
+      description: Popište situaci, ve které vám BRecord chybí nebo překáží.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Jak by to mohlo fungovat

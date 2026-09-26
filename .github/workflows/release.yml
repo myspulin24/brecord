@@ -1,0 +1,229 @@
+# Vydání nové verze.
+#
+# Spustí se na tag `v*` (například `v0.3.0`), sestaví instalátory pro Windows,
+# macOS a Linux a vydá je na GitHubu i s `latest*.yml`, podle kterých se
+# aktualizuje aplikace (electron-updater, `build.publish` v package.json).
+#
+# Pořadí vydání: push na main → zelené `ci` → teprve pak tag. Job `test`
+# to navíc hlídá sám, takže tag na červený commit nic nevydá.
+
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Ruční spuštění, když je potřeba vydání přestavět.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag, ze kterého sestavit (například v0.3.0)'
+        required: true
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  # Jediná branka. Buildy na ní visí přes `needs:`, takže neprojde-li,
+  # nevydá se nic -- a testy nemůžou na třech platformách dopadnout různě.
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalace závislostí
+        run: npm ci
+
+      - name: Lint a testy
+        run: |
+          npm run lint
+          npm test
+
+      - name: Tag odpovídá verzi v package.json
+        run: |
+          version="v$(node -p 'require("./package.json").version')"
+          if [ "$version" != "$TAG" ]; then
+            echo "::error::Tag $TAG, ale package.json má $version."
+            exit 1
+          fi
+
+      # Vydává se jen commit, na kterém `ci` doběhlo zeleně.
+      - name: CI na tomhle commitu je zelené
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          sha=$(git rev-parse HEAD)
+          green=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$sha&status=success&per_page=1" --jq '.total_count')
+          if [ "$green" = "0" ]; then
+            echo "::error::Na commitu $sha není zelený běh ci. Počkejte, až doběhne, a tag pushněte znovu."
+            exit 1
+          fi
+
+      # Poznámky se berou z CHANGELOG.md. Aplikace je ukáže v okně
+      # „Co je nového“, takže sekce „nevydáno“ nebo žádná sekce = žádné vydání.
+      - name: Poznámky k vydání
+        run: node scripts/changelog.mjs "${TAG#v}" --release
+
+  # Koncept vydání se zakládá jednou předem a buildy do něj jen nahrávají.
+  # Tři joby, které by si release zakládaly souběžně, skončí duplikáty.
+  # Koncept navíc nevidí updater (dívá se na `releases/latest`).
+  create-release:
+    needs: test
+    runs-on: ubuntu-24.04
+    outputs:
+      id: ${{ steps.create.outputs.id }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Založit koncept vydání
+        id: create
+        run: |
+          set -eu
+          # Hledá se i mezi koncepty, takže opakované spuštění nezaloží druhý.
+          id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
+                 --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -1 || true)
+          if [ -z "$id" ]; then
+            node scripts/changelog.mjs "${TAG#v}" --release > "$RUNNER_TEMP/notes.md"
+            cat >> "$RUNNER_TEMP/notes.md" <<'NOTES'
+
+          ---
+
+          **Stažení:** Windows `BRecord-Setup-*.exe` · macOS `*-mac-arm64.dmg` (Apple Silicon) nebo `*-mac-x64.dmg` (Intel) · Linux `*.AppImage` nebo `*.deb`. Kontrolní součty jsou v `SHA256SUMS.txt`.
+
+          Kdo BRecord už má, nemusí nic stahovat: na Windows a v AppImage se nová verze nainstaluje sama, na macOS aplikace nabídne odkaz ke stažení.
+          NOTES
+            id=$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" \
+                   -f "tag_name=$TAG" \
+                   -f "name=BRecord ${TAG#v}" \
+                   -F "body=@$RUNNER_TEMP/notes.md" \
+                   -F draft=true -F prerelease=false \
+                   --jq .id)
+          fi
+          [ -n "$id" ] || { echo "::error::Vydání pro $TAG se nepodařilo založit."; exit 1; }
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (${{ matrix.os }})
+    needs: [test, create-release]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            dist: dist:win
+            files: dist/*.exe dist/*.exe.blockmap dist/latest.yml
+          - os: macos-latest
+            dist: dist:mac
+            files: dist/*.dmg dist/*.zip dist/*.blockmap dist/latest-mac.yml
+          - os: ubuntu-24.04
+            dist: dist:linux
+            files: dist/*.AppImage dist/*.deb dist/latest-linux.yml
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalace závislostí
+        run: npm ci
+
+      - name: Sestavit instalátory
+        run: npm run ${{ matrix.dist }}
+
+      - name: Podpis balíčku (macOS)
+        if: runner.os == 'macOS'
+        run: codesign --verify --deep --strict --verbose=2 dist/mac-arm64/BRecord.app
+
+      # Stejný smoke test jako v ci, tentokrát na tom, co se opravdu vydá.
+      - name: Smoke test
+        if: runner.os != 'Linux'
+        run: npm run smoke
+
+      - name: Smoke test (virtuální displej)
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum npm run smoke
+
+      # Přes API a id konceptu: `gh release upload` hledá vydání podle tagu,
+      # a koncepty přes tag dohledat nejde. Soubor stejného jména (opakovaný
+      # běh) se nejdřív smaže.
+      - name: Nahrát do konceptu vydání
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ needs.create-release.outputs.id }}
+        run: |
+          set -eu
+          shopt -s nullglob
+          files=(${{ matrix.files }})
+          [ ${#files[@]} -gt 0 ] || { echo "::error::Build nevytvořil žádné soubory."; exit 1; }
+          for f in "${files[@]}"; do
+            name=$(basename "$f")
+            old=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" --paginate --jq ".[] | select(.name == \"$name\") | .id")
+            [ -z "$old" ] || gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$old"
+            echo "↑ $name"
+            curl --fail-with-body -sS -o /dev/null \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary @"$f" \
+              "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=$name"
+          done
+
+  # Zveřejní se až ve chvíli, kdy jsou uvnitř všechny tři platformy. Teprve
+  # tím se vydání stane tím, co updater vidí jako `latest`.
+  publish:
+    needs: [create-release, build]
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_ID: ${{ needs.create-release.outputs.id }}
+    steps:
+      - name: Kontrolní součty SHA-256
+        run: |
+          set -eu
+          mkdir assets && cd assets
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" --paginate \
+            --jq '.[] | select(.name != "SHA256SUMS.txt") | "\(.id) \(.name)"' |
+          while read -r id name; do
+            curl --fail -sSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/octet-stream" \
+              -o "$name" "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/assets/$id"
+          done
+          sha256sum -- * | sort -k2 > ../SHA256SUMS.txt
+          cat ../SHA256SUMS.txt
+          old=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" --jq '.[] | select(.name == "SHA256SUMS.txt") | .id')
+          [ -z "$old" ] || gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$old"
+          curl --fail-with-body -sS -o /dev/null -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: text/plain" \
+            --data-binary @../SHA256SUMS.txt \
+            "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=SHA256SUMS.txt"
+
+      - name: Zveřejnit vydání
+        run: |
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+            -F draft=false -F prerelease=false -f make_latest=true --jq '.html_url'

@@ -1,0 +1,30 @@
+# Statická bezpečnostní analýza JavaScriptu (GitHub CodeQL).
+#
+# Hlídá hlavně místa, kudy do aplikace teče cizí vstup: výstup CLI nástrojů,
+# odpovědi API a text poznámek, který se vykresluje v okně.
+
+name: codeql
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '17 4 * * 1'
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: javascript-typescript
+          queries: security-and-quality
+
+      - uses: github/codeql-action/analyze@v4

@@ -1,0 +1,148 @@
+# Kontroly na každý push na main a každý pull request.
+#
+# Odpovídá na jedinou otázku: je repozitář zelený? Instalátory se tu
+# nestaví -- to dělá `release.yml`. Sestavuje se jen rozbalená aplikace
+# (`npm run pack`), na které běží smoke test přes všechny obrazovky. Chyba
+# v balení se tak ukáže tady, ne až při vydání.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint a generované soubory
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalace závislostí
+        run: npm ci
+
+      - name: ESLint
+        run: npm run lint
+
+      # Ikona aplikace, ikony lišty i SVG loga v okně vznikají z jedné
+      # definice ve `scripts/make-icons.js`. Kdo změní geometrii loga a nechá
+      # v repozitáři staré PNG, dozví se to tady.
+      - name: Ikony odpovídají skriptu
+        run: |
+          npm run icons
+          git diff --exit-code -- assets build src/ui/logo.js
+
+  test:
+    name: Testy (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalace závislostí
+        run: npm ci
+
+      # Na Windows testy navíc zkompilují a spustí nativní pomocník WASAPI
+      # (`src/native/win-loopback.cs`) kompilátorem, který je součástí systému.
+      - name: Unit testy
+        run: npm test
+
+  e2e:
+    name: End-to-end přepis (whisper.cpp)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      # Řeč se syntetizuje, žádný mikrofon ani zvukovka tu není potřeba.
+      - name: espeak-ng
+        run: sudo apt-get update && sudo apt-get install -y espeak-ng
+
+      # whisper.cpp a model tiny (75 MB) se stahují z GitHubu a Hugging Face.
+      # V mezipaměti je to rychlejší a test nespadne na výpadku cizí služby.
+      - uses: actions/cache@v6
+        with:
+          path: ~/.brecord-e2e
+          key: e2e-whisper-tiny-${{ runner.os }}-v1
+
+      - name: Instalace závislostí
+        run: npm ci
+
+      - name: Nahrávka → přepis → poznámka
+        run: npm run e2e
+
+  package:
+    name: Balení a smoke test (${{ matrix.os }})
+    needs: [lint, test]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalace závislostí
+        run: npm ci
+
+      - name: Sestavit aplikaci
+        run: npm run pack
+
+      # Ad-hoc podpis celého balíčku, ne jen podpis od linkeru. Bez něj macOS
+      # nedokáže aplikaci přiřadit stabilní identitu a zapomíná udělená
+      # oprávnění k mikrofonu a nahrávání obrazovky.
+      - name: Podpis balíčku (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          codesign --verify --deep --strict --verbose=2 dist/mac-arm64/BRecord.app
+          codesign -dv dist/mac-arm64/BRecord.app 2>&1 | grep -E '^(Identifier|Signature)='
+
+      # Aplikace se spustí mimo obrazovku, projde všechny obrazovky ve světlém
+      # i tmavém vzhledu a skončí chybou, pokud rozhraní cokoli zalogovalo.
+      - name: Smoke test
+        if: runner.os != 'Linux'
+        run: npm run smoke
+
+      - name: Smoke test (virtuální displej)
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum npm run smoke
+
+      - name: Snímky obrazovek
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: smoke-${{ matrix.os }}
+          path: smoke-output/
+          retention-days: 7
+          if-no-files-found: ignore

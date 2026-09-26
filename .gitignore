@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.build-check/
+smoke-output/
+coverage/
+.env
+*.log
+.DS_Store
