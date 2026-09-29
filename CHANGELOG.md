@@ -7,7 +7,7 @@ v **Nastavení → Obecné → Aktualizace**, když nabídne novou verzi. Vydán
 záznamu tady se nesestaví. Píše se pro toho, kdo aplikaci používá: co se
 změní v okně, ne které soubory se upravily. Nejnovější verze je nahoře.
 
-## 0.6.0 — nevydáno
+## 0.6.0 — 2026-09-30
 
 ### Mluvčí
 

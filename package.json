@@ -1,7 +1,7 @@
 {
   "name": "brecord",
   "productName": "BRecord",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Lokální zápisy ze schůzek: nahrávání mikrofonu i zvuku počítače, přepis přes whisper.cpp a shrnutí přes Claude Code nebo Codex.",
   "author": {
     "name": "Michal Jašek",
