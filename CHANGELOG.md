@@ -7,6 +7,18 @@ v **Nastavení → Obecné → Aktualizace**, když nabídne novou verzi. Vydán
 záznamu tady se nesestaví. Píše se pro toho, kdo aplikaci používá: co se
 změní v okně, ne které soubory se upravily. Nejnovější verze je nahoře.
 
+## 0.5.1 — nevydáno
+
+### Přepis a shrnutí
+
+- **Slovník platí i pro shrnutí.** Jména a pojmy ze slovníku dostane i AI,
+  která píše shrnutí, takže je napíše správně (třeba SyteLine, ne Sideline).
+- **Slovník platí pro celou nahrávku.** Dřív ho whisper bral v potaz jen na
+  prvních zhruba 30 sekundách.
+- **Opravy častých chyb.** Na nový řádek slovníku napište `správně = špatně`,
+  třeba `SyteLine = Sideline`, a chybná varianta se v přepisu sama nahradí.
+  U starší poznámky to zabere, když ji necháte znovu shrnout.
+
 ## 0.5.0 — 2026-09-29
 
 ### Aktualizace

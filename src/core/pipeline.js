@@ -4,6 +4,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const { applyToTurns, parseGlossary } = require('./glossary');
 const { BASE_NAME, dateFromBaseName, readNote, writeNote } = require('./notes');
 const { summarize } = require('./summarize');
 const { buildTurns } = require('./transcript');
@@ -39,7 +40,7 @@ async function processRecording(audioFile, { cfg, meta = {}, onStatus = () => {}
     onProgress: (progress) => onStatus({ stage: 'transcribing', progress }),
   });
   warnings.push(...transcript.warnings.map((w) => `Použit záložní lokální přepis: ${w}`));
-  const { turns } = buildTurns(transcript.segments, analysis);
+  const turns = applyToTurns(buildTurns(transcript.segments, analysis).turns, parseGlossary(cfg.settings.transcription.prompt));
   const common = { startedAt, durationSec: durationSec || (turns.length ? turns[turns.length - 1].end : 0), audioFile: file, transcription: transcript.engine, turns, warnings };
 
   if (!turns.length || cfg.settings.summary.provider === 'none') {
@@ -66,6 +67,8 @@ async function processRecording(audioFile, { cfg, meta = {}, onStatus = () => {}
 async function resummarizeNote(noteFile, { cfg, onStatus = () => {}, signal } = {}) {
   const note = readNote(noteFile);
   if (!note.turns.length) throw new Error('Poznámka neobsahuje přepis, který by šlo shrnout');
+  // A dictionary entry added since fixes the old transcript too.
+  note.turns = applyToTurns(note.turns, parseGlossary(cfg.settings.transcription.prompt));
   const audio = ['.wav', '.m4a', '.mp3']
     .map((ext) => noteFile.replace(/\.md$/i, ext))
     .find((p) => fs.existsSync(p));

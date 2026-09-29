@@ -302,6 +302,28 @@ test('system prompt adapts to the recorder name and labels', () => {
   assert.match(summarize.systemPrompt({ notesLanguage: 'auto' }), /same language as the transcript/);
 });
 
+test('the dictionary fixes misheard terms in the transcript and the summary prompt', () => {
+  const glossary = require('../src/core/glossary');
+  const g = glossary.parseGlossary('Petra Nováková, Acme; OKR\nSyteLine = Sideline, Sajt lajn\n\nsyteline = SideLine');
+  assert.deepEqual(g, [
+    { term: 'Petra Nováková', variants: [] },
+    { term: 'Acme', variants: [] },
+    { term: 'OKR', variants: [] },
+    { term: 'SyteLine', variants: ['Sideline', 'Sajt lajn'] },
+  ]);
+  assert.equal(glossary.whisperPrompt(g), 'Petra Nováková, Acme, OKR, SyteLine');
+  assert.equal(glossary.whisperPrompt(g, 20), 'Petra Nováková, Acme');
+
+  const fixed = glossary.applyGlossary('Přístup do Sideline, sideline i Sajt  lajn. Sidelines a ReSideline ne. acme a syteline.', g);
+  assert.equal(fixed, 'Přístup do SyteLine, SyteLine i SyteLine. Sidelines a ReSideline ne. Acme a SyteLine.');
+  assert.deepEqual(glossary.applyToTurns([{ speaker: 'Ostatní', text: 'v sideline' }], g), [{ speaker: 'Ostatní', text: 'v SyteLine' }]);
+
+  const system = summarize.systemPrompt({ glossary: g });
+  assert.match(system, /Glossary, the correct spelling .*: Petra Nováková, Acme, OKR, SyteLine\./);
+  assert.match(system, /Known misrecognitions: "Sideline" → SyteLine; "Sajt lajn" → SyteLine\./);
+  assert.doesNotMatch(summarize.systemPrompt({}), /Glossary/);
+});
+
 test('API providers are ignored while they are experimental', async () => {
   const base = config.loadConfig();
   const cfg = {

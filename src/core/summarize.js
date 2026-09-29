@@ -7,6 +7,7 @@ const os = require('os');
 const path = require('path');
 const { CLIS, cliEnv, cliStatus, resolveCli } = require('./cli-tools');
 const { cloudApisEnabled } = require('./config');
+const { glossaryPrompt, parseGlossary } = require('./glossary');
 const { run, tail } = require('./proc');
 const { ME, THEM, turnsToPlain } = require('./transcript');
 
@@ -39,7 +40,7 @@ const CLI_TIMEOUT_MS = 20 * 60 * 1000;
 const LANGUAGES = { cs: 'Czech', en: 'English', sk: 'Slovak', de: 'German', pl: 'Polish' };
 const estimateTokens = (text) => Math.ceil(text.length / 3.2);
 
-function systemPrompt({ myName, notesLanguage, labelled }) {
+function systemPrompt({ myName, notesLanguage, labelled, glossary = [] }) {
   const code = notesLanguage || 'cs';
   const language = code === 'auto' ? null : LANGUAGES[code] || code;
   const me = myName ? `${myName} (labelled "${ME}")` : `the person who recorded it (labelled "${ME}")`;
@@ -49,6 +50,7 @@ function systemPrompt({ myName, notesLanguage, labelled }) {
     labelled
       ? `Speaker labels: "${ME}" (Czech for "me") is ${me}, captured by their microphone. "${THEM}" (Czech for "others") is everyone heard through the computer's audio, i.e. the remote participants. Labels are inferred from audio levels and can be wrong on short or overlapping turns.`
       : 'The transcript has no speaker labels; attribute statements to people only when it is clear from context.',
+    ...glossaryPrompt(glossary),
     '',
     'Produce:',
     '- title: a short, specific title for the meeting (at most 8 words).',
@@ -346,7 +348,7 @@ async function resolvePlan(cfg) {
 async function summarizeWith(id, turns, cfg, { meta, signal, onStatus } = {}) {
   const provider = PROVIDERS[id];
   const s = cfg.settings;
-  const system = systemPrompt({ myName: s.myName, notesLanguage: s.notesLanguage, labelled: turns.some((t) => t.speaker) });
+  const system = systemPrompt({ myName: s.myName, notesLanguage: s.notesLanguage, labelled: turns.some((t) => t.speaker), glossary: parseGlossary(s.transcription.prompt) });
   const header = meetingHeader(meta);
   const transcript = turnsToPlain(turns);
   let model;

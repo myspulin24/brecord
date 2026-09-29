@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { MODELS_DIR, WHISPER_DIR, cloudApisEnabled, expandHome } = require('./config');
+const { parseGlossary, whisperPrompt } = require('./glossary');
 const { IS_WIN, isFile, run, tail, which } = require('./proc');
 const { planChunks, writeMonoSlice } = require('./wav');
 
@@ -89,6 +90,18 @@ function describePlan(cfg) {
   return w.ok ? `whisper.cpp (${w.modelName})` : 'whisper.cpp (nenainstalovaný)';
 }
 
+// whisper.cpp keeps the prompt only for the first 30 s window unless told to
+// carry it; builds from before that option reject it, so ask the binary.
+const carryCache = new Map();
+async function canCarryPrompt(bin) {
+  if (!carryCache.has(bin)) {
+    carryCache.set(bin, run(bin, ['--help'], { cwd: path.dirname(bin), timeoutMs: 15000 })
+      .then((r) => /--carry-initial-prompt/.test(`${r.stdout}\n${r.stderr}`))
+      .catch(() => false));
+  }
+  return carryCache.get(bin);
+}
+
 async function transcribeLocal(file, cfg, { onProgress, signal }) {
   const w = localWhisper(cfg);
   if (!w.bin) throw new Error('whisper.cpp není nainstalovaný (Nastavení → Přepis → Nainstalovat)');
@@ -98,7 +111,11 @@ async function transcribeLocal(file, cfg, { onProgress, signal }) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'minutes-whisper-'));
   const outBase = path.join(tmp, 'transcript');
   const args = ['-m', w.model, '-f', file, '-l', t.language || 'auto', '-t', String(threads), '-oj', '-of', outBase, '-pp'];
-  if (t.prompt) args.push('--prompt', t.prompt);
+  const prompt = whisperPrompt(parseGlossary(t.prompt));
+  if (prompt) {
+    args.push('--prompt', prompt);
+    if (await canCarryPrompt(w.bin)) args.push('--carry-initial-prompt');
+  }
   try {
     let lastPct = -1;
     // The Linux release keeps its shared libraries next to the binary.
@@ -185,7 +202,7 @@ async function transcribeApi(provider, file, cfg, { analysis, onProgress, signal
       form.append('timestamp_granularities[]', 'segment');
       if (t.language && t.language !== 'auto') form.append('language', t.language);
       // Carry the end of the previous chunk as context so names and spelling stay consistent.
-      const prompt = [t.prompt, previousText.slice(-400)].filter(Boolean).join(' ');
+      const prompt = [whisperPrompt(parseGlossary(t.prompt)), previousText.slice(-400)].filter(Boolean).join(' ');
       if (prompt) form.append('prompt', prompt);
       const res = await fetchWithRetry(`${api.base}/audio/transcriptions`, {
         method: 'POST',
