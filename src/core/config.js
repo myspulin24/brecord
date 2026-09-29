@@ -38,6 +38,7 @@ const DEFAULT_SETTINGS = {
   notesLanguage: 'cs',
   theme: 'system', // system | dark | light
   openNoteWhenDone: false,
+  noteEditor: 'pilcrow', // pilcrow (when installed) | system
   notifications: true,
   globalShortcut: false, // Ctrl/Cmd+Alt+R starts and stops recording
   trayHintShown: false,

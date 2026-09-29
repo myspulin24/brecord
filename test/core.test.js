@@ -191,6 +191,60 @@ test('notes from the English development builds are still readable', () => {
   assert.equal(back.durationSec, 17);
   const listed = notes.listNotes(TMP).find((n) => n.file === file);
   assert.equal(listed.status, 'summary-failed');
+  assert.equal(listed.issue, 'boom');
+});
+
+test('tasks are ticked, added, edited and removed in the note file', () => {
+  const dir = path.join(TMP, 'tasks');
+  fs.mkdirSync(dir);
+  const file = path.join(dir, '2026-09-29-1306.md');
+  const turns = [{ start: 1, end: 4, speaker: 'Ostatní', text: 'Napiš si - [ ] tohle nepatří mezi úkoly.' }];
+  const items = [{ owner: 'Petra', task: 'Informovat QA', due: 'pátek' }, { owner: 'Michal', task: 'Poslat ceník', due: '' }];
+  const summary = { provider: 'Claude Code', notes: { title: 'Úkoly', summary: ['a'], decisions: [], action_items: items } };
+  notes.writeNote(file, { startedAt: new Date(2026, 8, 29, 13, 6), durationSec: 60, turns, summary });
+
+  let tasks = notes.readTasks(file);
+  assert.deepEqual(tasks.map((t) => [t.owner, t.task, t.due, t.done]), [['Petra', 'Informovat QA', 'pátek', false], ['Michal', 'Poslat ceník', '', false]]);
+
+  tasks = notes.updateTask(file, { type: 'toggle', line: tasks[1].line, raw: tasks[1].raw, done: true });
+  assert.equal(tasks[1].done, true);
+  assert.match(fs.readFileSync(file, 'utf8'), /^- \[x\] \*\*Michal\*\* — Poslat ceník$/m);
+  const listed = notes.listNotes(dir)[0];
+  assert.deepEqual([listed.actions, listed.tasksDone, listed.tasksTotal], [1, 1, 2]);
+
+  // A line that changed since the UI read it is left alone.
+  assert.throws(() => notes.updateTask(file, { type: 'toggle', line: tasks[0].line, raw: 'něco jiného', done: true }), /mezitím změnila/);
+
+  tasks = notes.updateTask(file, { type: 'add', owner: 'Jana', task: '  Otestovat\npokladnu ', due: 'zítra' });
+  assert.deepEqual(tasks.map((t) => t.task), ['Informovat QA', 'Poslat ceník', 'Otestovat pokladnu']);
+  tasks = notes.updateTask(file, { type: 'edit', line: tasks[2].line, raw: tasks[2].raw, owner: '', task: 'Otestovat platby', due: '' });
+  assert.equal(tasks[2].raw, 'Otestovat platby');
+  for (const t of [...tasks].reverse()) notes.updateTask(file, { type: 'remove', line: t.line, raw: t.raw });
+  const md = fs.readFileSync(file, 'utf8');
+  assert.match(md, /## Úkoly\n\n_Žádné úkoly\._\n\n---\n/);
+  assert.equal(notes.readTasks(file).length, 0);
+  assert.equal(notes.readNote(file).turns[0].text, turns[0].text, 'transcript untouched');
+
+  // Notes without a summary get a task list above the transcript divider.
+  const plain = path.join(dir, '2026-09-29-1400.md');
+  fs.writeFileSync(plain, notes.renderNote({ startedAt: new Date(2026, 8, 29, 14, 0), durationSec: 60, turns }).replace(/\n/g, '\r\n'));
+  notes.updateTask(plain, { type: 'add', owner: '', task: 'Zavolat dodavateli' });
+  const text = fs.readFileSync(plain, 'utf8');
+  assert.ok(text.includes('\r\n## Úkoly\r\n\r\n- [ ] Zavolat dodavateli\r\n\r\n---\r\n'), 'keeps CRLF and lands above the divider');
+  assert.ok(!/[^\r]\n/.test(text), 'no bare LF');
+});
+
+test('re-summarizing keeps the tasks that were already done', () => {
+  const file = path.join(TMP, 'done.md');
+  const items = [{ owner: 'Petra', task: 'Informovat QA', due: 'pátek' }, { owner: 'Michal', task: 'Poslat ceník' }];
+  const turns = [{ start: 1, end: 4, speaker: 'Já', text: 'Ahoj.' }];
+  notes.writeNote(file, { startedAt: new Date(2026, 8, 29, 9, 0), durationSec: 60, turns, summary: { provider: 'Codex', notes: { title: 'x', summary: [], decisions: [], action_items: items } } });
+  const [first] = notes.readTasks(file);
+  notes.updateTask(file, { type: 'toggle', line: first.line, raw: first.raw, done: true });
+  const { doneTasks } = notes.readNote(file);
+  const renamed = [{ owner: 'petra', task: 'Informovat  QA', due: 'čtvrtek' }, ...items.slice(1)];
+  notes.writeNote(file, { startedAt: new Date(2026, 8, 29, 9, 0), durationSec: 60, turns, doneTasks, summary: { provider: 'Codex', notes: { title: 'x', summary: [], decisions: [], action_items: renamed } } });
+  assert.deepEqual(notes.readTasks(file).map((t) => t.done), [true, false]);
 });
 
 test('dotenv parsing and key updates keep the file tidy', () => {
@@ -343,4 +397,22 @@ test('terminal login command survives both cmd.exe passes', { skip: process.plat
     child.on('close', () => resolve(s));
   });
   assert.deepEqual(JSON.parse(out), args.slice(1));
+});
+
+test('notes open in Pilcrow where its installers put it', () => {
+  const editor = require('../src/core/editor');
+  const win = editor.pilcrowCandidates('win32', { LOCALAPPDATA: 'C:\\Users\\a\\AppData\\Local', ProgramFiles: 'C:\\Program Files' });
+  assert.deepEqual(win, [path.join('C:\\Users\\a\\AppData\\Local', 'Pilcrow', 'Pilcrow.exe'), path.join('C:\\Program Files', 'Pilcrow', 'Pilcrow.exe')]);
+  assert.equal(editor.pilcrowCandidates('darwin')[0], '/Applications/Pilcrow.app');
+  const note = '/Users/a/MeetingNotes/2026-09-29-1306.md';
+  assert.deepEqual(editor.pilcrowCommand('/Applications/Pilcrow.app', note, 'darwin'), ['open', ['-a', '/Applications/Pilcrow.app', note]]);
+  assert.deepEqual(editor.pilcrowCommand('C:\\P\\Pilcrow.exe', 'C:\\notes\\x.md', 'win32'), ['C:\\P\\Pilcrow.exe', ['C:\\notes\\x.md']]);
+});
+
+test('the system app opens notes when Pilcrow is not wanted', async () => {
+  const editor = require('../src/core/editor');
+  const opened = [];
+  const where = await editor.openNote('x.md', { editor: 'system', openPath: async (p) => opened.push(p) });
+  assert.equal(where, 'system');
+  assert.deepEqual(opened, ['x.md']);
 });

@@ -13,6 +13,7 @@ const store = {
   cli: {},
   local: null,
   notes: [],
+  editor: null,
   page: null,
   debug: false,
 };
@@ -384,6 +385,7 @@ function go(page) {
     api.refreshDevices().then(applyState);
   }
   if (page === 'notes' || page === 'home') refreshNotes();
+  if (page === 'general') refreshEditor();
   if (page === 'ai') refreshCli(true);
   if (page === 'transcription' || page === 'ai') refreshLocal();
   requestAnimationFrame(() => segmentedRegistry.forEach((p) => p()));
@@ -426,6 +428,7 @@ function applyState(s) {
   renderHome();
   renderMiniRec();
   renderDeviceLists();
+  if (sheet.note && sheet.tab === 'issues' && isRunning(sheet.note) !== sheet.running) renderSheetBody();
   if (s.phase === 'recording' && !clockTimer) {
     clockTimer = setInterval(tickClock, 250);
     tickClock();
@@ -549,48 +552,89 @@ function renderHome() {
   $('#chip-lang-value').textContent = langLabel(LANGS, store.settings.transcription.language || 'auto');
   $('#chip-notes-lang-value').textContent = langLabel(NOTE_LANGS, store.settings.notesLanguage || 'cs');
 
-  // Jobs
-  const card = $('#jobs-card');
-  card.hidden = !s.jobs.length && !s.task;
-  const host = $('#jobs');
-  host.replaceChildren();
-  for (const job of s.jobs) host.append(renderJob(job));
-  if (s.task) {
-    const row = el('div', 'job');
-    const ic = el('span', 'job-icon');
-    ic.innerHTML = icon('download', 20);
-    const main = el('div');
-    main.append(el('div', 'job-name', s.task));
-    const bar = el('div', 'progress indeterminate');
-    bar.append(el('div', 'progress-fill'));
-    main.append(bar);
-    row.append(ic, main, el('span'));
-    host.append(row);
-  }
+  renderJobs(s);
 }
 
-function renderJob(job) {
-  const row = el('div', 'job');
-  const ic = el('span', `job-icon${job.stage === 'queued' ? ' queued' : ''}`);
-  ic.innerHTML = icon(job.stage === 'summarizing' ? 'sparkles' : job.type === 'resummarize' ? 'redo' : 'wave', 20);
-  const main = el('div');
-  main.append(el('div', 'job-name', job.name));
-  main.append(el('div', 'job-text', job.text));
-  const bar = el('div', `progress${job.stage === 'summarizing' || (job.stage === 'transcribing' && !job.progress) ? ' indeterminate' : ''}`);
-  const fill = el('div', 'progress-fill');
-  fill.style.setProperty('--p', job.stage === 'transcribing' ? job.progress : job.stage === 'queued' ? 0 : 1);
-  bar.append(fill);
-  main.append(bar);
-  const steps = el('div', 'job-steps');
-  const order = job.type === 'resummarize' ? ['summarizing'] : ['transcribing', 'summarizing'];
-  const names = { transcribing: 'Přepis', summarizing: 'Shrnutí' };
-  order.forEach((st, i) => {
-    if (i) steps.append(el('span', 'job-sep'));
-    const idx = order.indexOf(job.stage);
-    steps.append(el('span', `job-step${st === job.stage ? ' active' : idx > i ? ' done' : ''}`, names[st]));
+// ── Processing ───────────────────────────────────────────────────────────
+// Rows are patched in place, keyed by file: rebuilding them on every state
+// update restarted the spinner and made the progress jump instead of glide.
+const jobRows = new Map();
+const STEP_NAMES = { transcribing: 'Přepis', summarizing: 'Shrnutí' };
+
+function jobViews(s) {
+  const views = s.jobs.map((job) => ({
+    key: job.id,
+    name: job.name,
+    text: job.text,
+    icon: job.stage === 'queued' ? 'clock' : job.stage === 'summarizing' ? 'sparkles' : job.type === 'resummarize' ? 'redo' : 'wave',
+    mode: job.stage === 'queued' ? 'idle' : job.stage === 'transcribing' && job.progress ? 'progress' : 'spin',
+    progress: job.stage === 'transcribing' ? job.progress : 0,
+    steps: job.type === 'resummarize' ? ['summarizing'] : ['transcribing', 'summarizing'],
+    stage: job.stage,
+  }));
+  if (s.task) views.push({ key: 'task', name: s.task, text: 'Probíhá na pozadí…', icon: 'download', mode: 'spin', progress: 0, steps: [], stage: '' });
+  return views;
+}
+
+function renderJobs(s) {
+  const views = jobViews(s);
+  $('#jobs-card').hidden = !views.length;
+  const host = $('#jobs');
+  const keep = new Set(views.map((v) => v.key));
+  for (const [key, row] of jobRows) {
+    if (!keep.has(key)) {
+      row.remove();
+      jobRows.delete(key);
+    }
+  }
+  views.forEach((v, i) => {
+    let row = jobRows.get(v.key);
+    if (!row) {
+      row = jobRow();
+      jobRows.set(v.key, row);
+    }
+    patchJob(row, v);
+    // Moving a node restarts its animations, so only touch misplaced rows.
+    if (host.children[i] !== row) host.insertBefore(row, host.children[i] || null);
   });
-  row.append(ic, main, steps);
+}
+
+function jobRow() {
+  const row = el('div', 'job');
+  const ring = el('span', 'job-ring');
+  ring.innerHTML = '<svg class="ring" viewBox="0 0 48 48" aria-hidden="true"><circle class="ring-track" cx="24" cy="24" r="21" pathLength="100"/><circle class="ring-fill" cx="24" cy="24" r="21" pathLength="100"/></svg><span class="job-glyph"></span>';
+  const main = el('div', 'job-main');
+  main.append(el('div', 'job-name'), el('div', 'job-text'));
+  row.append(ring, main, el('div', 'job-steps'));
   return row;
+}
+
+function patchJob(row, v) {
+  const ring = row.querySelector('.job-ring');
+  ring.dataset.mode = v.mode;
+  ring.style.setProperty('--p', Math.max(0, Math.min(1, v.progress)));
+  if (ring.dataset.icon !== v.icon) {
+    ring.dataset.icon = v.icon;
+    ring.querySelector('.job-glyph').innerHTML = icon(v.icon, 18);
+  }
+  const name = row.querySelector('.job-name');
+  if (name.textContent !== v.name) name.textContent = v.name;
+  const text = row.querySelector('.job-text');
+  if (text.textContent !== v.text) text.textContent = v.text;
+  const steps = row.querySelector('.job-steps');
+  if (steps.dataset.order !== v.steps.join()) {
+    steps.dataset.order = v.steps.join();
+    steps.replaceChildren();
+    v.steps.forEach((st, i) => {
+      if (i) steps.append(el('span', 'job-sep'));
+      steps.append(el('span', 'job-step', STEP_NAMES[st]));
+    });
+  }
+  const at = v.steps.indexOf(v.stage);
+  steps.querySelectorAll('.job-step').forEach((node, i) => {
+    node.classList.toggle('active', i === at);
+    node.classList.toggle('done', at > i);
+  });
 }
 
 // ── Device pickers ───────────────────────────────────────────────────────
@@ -761,6 +805,7 @@ async function refreshNotes() {
   store.notes = await api.listNotes(200);
   $('#notes-count').textContent = store.notes.length ? String(store.notes.length) : '';
   renderNotes();
+  syncNoteSheet();
 }
 
 const STATUS = {
@@ -771,7 +816,25 @@ const STATUS = {
   'transcript-failed': { icon: 'alert', cls: 'bad', badge: { text: 'Přepis selhal', cls: 'bad' } },
 };
 
-function noteRow(n, i, big) {
+// Done/total of a note's tasks; opens the note's task list.
+function taskChip(n) {
+  const complete = n.tasksDone === n.tasksTotal;
+  const chip = el('button', `task-chip${complete ? ' complete' : ''}`);
+  chip.type = 'button';
+  chip.title = complete ? 'Všechny úkoly jsou hotové' : `${n.actions} ${plural(n.actions, 'otevřený úkol', 'otevřené úkoly', 'otevřených úkolů')}`;
+  chip.innerHTML = complete
+    ? icon('check', 13)
+    : `<svg class="mini-ring" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" pathLength="100"/><circle cx="8" cy="8" r="6" pathLength="100" style="stroke-dashoffset: ${(1 - n.tasksDone / n.tasksTotal) * 100}px"/></svg>`;
+  chip.append(el('span', '', `${n.tasksDone}/${n.tasksTotal}`));
+  chip.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openNoteSheet(n, 'tasks');
+  });
+  chip.addEventListener('keydown', (e) => e.stopPropagation());
+  return chip;
+}
+
+function noteRow(n, i, big, onOpen) {
   const st = STATUS[n.status] || STATUS.ok;
   const row = el('div', 'note-row');
   row.tabIndex = 0;
@@ -782,7 +845,7 @@ function noteRow(n, i, big) {
   const main = el('div', 'note-main');
   main.append(el('div', 'note-title', n.title));
   const meta = el('div', 'note-meta');
-  const parts = [fmtDay(n.startedAt), fmtTime(n.startedAt), n.durationSec ? fmtDuration(n.durationSec) : null, n.actions ? `${n.actions} ${plural(n.actions, 'úkol', 'úkoly', 'úkolů')}` : null].filter(Boolean);
+  const parts = [fmtDay(n.startedAt), fmtTime(n.startedAt), n.durationSec ? fmtDuration(n.durationSec) : null].filter(Boolean);
   parts.forEach((p, idx) => {
     if (idx) meta.append(el('span', 'sep'));
     meta.append(el('span', '', p));
@@ -790,7 +853,18 @@ function noteRow(n, i, big) {
   main.append(meta);
   if (big && n.summary) main.append(el('div', 'note-summary', n.summary));
   const side = el('div', 'note-side');
-  if (st.badge) side.append(el('span', `badge ${st.badge.cls}`, st.badge.text));
+  if (n.tasksTotal) side.append(taskChip(n));
+  if (st.badge) {
+    const badge = el('button', `badge clickable ${st.badge.cls}`, st.badge.text);
+    badge.type = 'button';
+    badge.title = 'Co s tím';
+    badge.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openNoteSheet(n, 'issues');
+    });
+    badge.addEventListener('keydown', (e) => e.stopPropagation());
+    side.append(badge);
+  }
   const actions = el('div', 'note-actions');
   const act = (iconName, title, fn) => {
     const b = el('button', 'btn btn-ghost btn-sm btn-icon');
@@ -808,7 +882,7 @@ function noteRow(n, i, big) {
   act('folder', 'Zobrazit ve složce', () => api.revealNote(n.file));
   side.append(actions);
   row.append(ic, main, side);
-  const open = () => api.openNote(n.file);
+  const open = onOpen || (() => openNoteFile(n));
   row.addEventListener('click', open);
   row.addEventListener('keydown', (e) => e.key === 'Enter' && open());
   return row;
@@ -831,14 +905,494 @@ function renderNotes() {
 
   const q = ($('#notes-search').value || '').trim().toLowerCase();
   const list = store.notes.filter((n) => {
-    if (notesFilter === 'actions' && !n.actions) return false;
+    if (notesFilter === 'actions' && !n.tasksTotal) return false;
     if (notesFilter === 'issues' && !['summary-failed', 'transcript-failed', 'pending'].includes(n.status)) return false;
     return !q || n.title.toLowerCase().includes(q) || (n.summary || '').toLowerCase().includes(q);
   });
   const all = $('#all-notes');
   all.replaceChildren();
   if (!list.length) all.append(store.notes.length ? emptyState('Nic nenalezeno', 'Zkuste jiné hledání nebo filtr.', 'search') : emptyState('Zatím žádné poznámky', 'Po první nahrávce se tu objeví zápis ze schůzky.'));
-  list.forEach((n, i) => all.append(noteRow(n, Math.min(i, 12), true)));
+  // In the task and problem views a note opens its sheet, not the editor.
+  const tab = notesFilter === 'actions' ? 'tasks' : notesFilter === 'issues' ? 'issues' : null;
+  list.forEach((n, i) => all.append(noteRow(n, Math.min(i, 12), true, tab && (() => openNoteSheet(n, tab)))));
+}
+
+// ── Note sheet: the tasks and problems of one note ──────────────────────
+const sheet = { note: null, tab: 'tasks', tasks: null, editing: -1, running: false, draft: null, fresh: null, tabs: null, closeTimer: null };
+
+const ISSUES = {
+  'summary-failed': { title: 'Shrnutí se nepodařilo', text: 'Přepis zůstal uložený. Zkontrolujte přihlášení nebo poskytovatele a nechte poznámku shrnout znovu.', action: 'Znovu shrnout', started: 'Poznámka se znovu shrnuje', page: 'ai', pageLabel: 'AI shrnutí' },
+  'transcript-failed': { title: 'Přepis se nepodařil', text: 'Nahrávka zůstala uložená. Po opravě přepisu ji nechte zpracovat znovu.', action: 'Zpracovat znovu', started: 'Nahrávka se zpracuje znovu', page: 'transcription', pageLabel: 'Přepis', reprocess: true },
+  pending: { title: 'Shrnutí se nedokončilo', text: 'Zpracování se přerušilo, přepis je uložený. Shrnutí se dokončí při příštím spuštění, nebo ho dokončete hned.', action: 'Dokončit shrnutí', started: 'Poznámka se shrnuje', page: 'ai', pageLabel: 'AI shrnutí' },
+  'transcript-only': { title: 'Poznámka nemá shrnutí', text: 'Shrnutí bylo vypnuté nebo nebylo k dispozici. Můžete ho doplnit teď.', action: 'Shrnout', started: 'Poznámka se shrnuje', page: 'ai', pageLabel: 'AI shrnutí', soft: true },
+};
+
+const errText = (err) => String((err && err.message) || err).replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '');
+const sheetShows = (n) => !!sheet.note && sheet.note.file === n.file;
+const isRunning = (n) => !!store.state && store.state.jobs.some((j) => j.name === n.base);
+const editorName = () => (store.settings.noteEditor !== 'system' && store.editor && store.editor.pilcrow ? 'Pilcrow' : '');
+
+function isMine(owner) {
+  const o = owner.trim().toLowerCase();
+  const me = (store.settings.myName || '').trim().toLowerCase();
+  return o === 'já' || o === 'me' || (!!me && o === me);
+}
+
+async function openNoteFile(n) {
+  try {
+    await api.openNote(n.file);
+  } catch (err) {
+    toast(errText(err), 'error');
+  }
+}
+
+function iconButton(name, title, fn) {
+  const b = el('button', 'btn btn-ghost btn-sm btn-icon');
+  b.type = 'button';
+  b.title = title;
+  b.setAttribute('aria-label', title);
+  b.innerHTML = icon(name, 15);
+  b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    fn();
+  });
+  return b;
+}
+
+function initNoteSheet() {
+  const layer = $('#note-sheet');
+  layer.innerHTML = `<div class="sheet-backdrop"></div>
+    <aside class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+      <header class="sheet-head">
+        <span class="note-icon" id="sheet-icon"></span>
+        <div class="sheet-heading"><div class="sheet-title" id="sheet-title"></div><div class="sheet-sub" id="sheet-sub"></div></div>
+        <button class="btn btn-ghost btn-sm btn-icon" type="button" id="sheet-close" title="Zavřít (Esc)" aria-label="Zavřít">${icon('x', 16)}</button>
+      </header>
+      <div class="sheet-tabs" id="sheet-tabs-wrap"><div class="segmented" id="sheet-tabs"></div></div>
+      <div class="sheet-body" id="sheet-body"></div>
+      <footer class="sheet-foot">
+        <button class="btn btn-soft btn-sm" type="button" id="sheet-open">${icon('external', 15)}<span id="sheet-open-label">Otevřít poznámku</span></button>
+        <button class="btn btn-ghost btn-sm" type="button" id="sheet-reveal">${icon('folder', 15)}<span>Zobrazit ve složce</span></button>
+      </footer>
+    </aside>`;
+  sheet.tabs = segmented($('#sheet-tabs'), [
+    { value: 'tasks', label: 'Úkoly', icon: 'tasks' },
+    { value: 'issues', label: 'K vyřešení', icon: 'alert' },
+  ], sheet.tab, (v) => {
+    sheet.tab = v;
+    sheet.editing = -1;
+    renderSheetBody(true);
+  });
+  $('.sheet-backdrop', layer).addEventListener('click', closeNoteSheet);
+  $('#sheet-close').addEventListener('click', closeNoteSheet);
+  $('#sheet-open').addEventListener('click', () => sheet.note && openNoteFile(sheet.note));
+  $('#sheet-reveal').addEventListener('click', () => sheet.note && api.revealNote(sheet.note.file));
+  // Escape a popover or a task being edited already claimed goes no further.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && sheet.note && !e.defaultPrevented) {
+      e.preventDefault();
+      closeNoteSheet();
+    }
+  });
+}
+
+async function openNoteSheet(n, tab) {
+  closePopover();
+  if (!sheetShows(n)) {
+    sheet.tasks = null;
+    sheet.draft = { task: '', owner: store.settings.myName || '', due: '' };
+  }
+  sheet.note = n;
+  sheet.tab = tab === 'issues' && ISSUES[n.status] ? 'issues' : 'tasks';
+  sheet.editing = -1;
+  const layer = $('#note-sheet');
+  clearTimeout(sheet.closeTimer);
+  layer.classList.remove('leaving');
+  layer.hidden = false;
+  renderSheetHead();
+  sheet.tabs.set(sheet.tab);
+  renderSheetBody(true);
+  requestAnimationFrame(() => {
+    layer.classList.add('open');
+    sheet.tabs.place();
+  });
+  $('#sheet-close').focus({ preventScroll: true });
+  await loadSheetTasks();
+}
+
+function closeNoteSheet() {
+  if (!sheet.note) return;
+  sheet.note = null;
+  const layer = $('#note-sheet');
+  layer.classList.remove('open');
+  layer.classList.add('leaving');
+  sheet.closeTimer = setTimeout(() => {
+    layer.hidden = true;
+    layer.classList.remove('leaving');
+    $('#sheet-body').replaceChildren();
+  }, 280);
+}
+
+// Reloads the tasks from the file; the list is only rebuilt when they differ,
+// so a reload after the user's own change doesn't restart any animation.
+async function loadSheetTasks() {
+  const n = sheet.note;
+  if (!n) return;
+  let tasks;
+  try {
+    tasks = await api.noteTasks(n.file);
+  } catch (err) {
+    tasks = [];
+    toast(errText(err), 'error');
+  }
+  if (!sheetShows(n) || JSON.stringify(tasks) === JSON.stringify(sheet.tasks)) return;
+  const first = !sheet.tasks;
+  sheet.tasks = tasks;
+  if (sheet.tab === 'tasks' && sheet.editing < 0) renderSheetBody(first);
+}
+
+// Keeps an open sheet in step with the note list after a refresh.
+function syncNoteSheet() {
+  if (!sheet.note) return;
+  const n = store.notes.find((x) => x.file === sheet.note.file);
+  if (!n) return closeNoteSheet();
+  const changed = n.status !== sheet.note.status || n.issue !== sheet.note.issue;
+  const modified = n.modified !== sheet.note.modified;
+  sheet.note = n;
+  renderSheetHead();
+  if (sheet.tab === 'issues' && !ISSUES[n.status]) {
+    sheet.tab = 'tasks';
+    sheet.tabs.set('tasks');
+    renderSheetBody(true);
+  } else if (changed) {
+    renderSheetBody(true);
+  }
+  if (modified) loadSheetTasks();
+}
+
+function renderSheetHead() {
+  const n = sheet.note;
+  const st = STATUS[n.status] || STATUS.ok;
+  const ic = $('#sheet-icon');
+  ic.className = `note-icon ${st.cls}`;
+  ic.innerHTML = icon(st.icon, 19);
+  $('#sheet-title').textContent = n.title;
+  $('#sheet-sub').textContent = [fmtDay(n.startedAt), fmtTime(n.startedAt), n.durationSec ? fmtDuration(n.durationSec) : null].filter(Boolean).join(' · ');
+  $('#sheet-tabs-wrap').hidden = !ISSUES[n.status];
+  $('#sheet-open-label').textContent = editorName() ? `Otevřít v ${editorName()}` : 'Otevřít poznámku';
+}
+
+// Content slides in when the sheet opens or switches tab; later redraws after
+// a change stay still, only the task that changed animates.
+function renderSheetBody(enter = false) {
+  const body = $('#sheet-body');
+  body.replaceChildren();
+  body.classList.remove('enter');
+  if (enter) {
+    void body.offsetWidth;
+    body.classList.add('enter');
+  }
+  if (!sheet.note) return;
+  if (sheet.tab === 'issues' && ISSUES[sheet.note.status]) renderIssue(body);
+  else renderTasks(body);
+}
+
+function renderTasks(body) {
+  const tasks = sheet.tasks;
+  if (!tasks) return;
+  if (tasks.length) {
+    const head = el('div', 'tasks-head');
+    head.append(el('div', 'tasks-count'));
+    if (tasks.some((t) => !t.done)) {
+      const copy = el('button', 'btn btn-ghost btn-sm');
+      copy.type = 'button';
+      copy.innerHTML = icon('copy', 15);
+      copy.append(el('span', '', 'Kopírovat otevřené'));
+      copy.addEventListener('click', () => {
+        const text = sheet.tasks.filter((t) => !t.done).map((t) => `- [ ] ${t.raw}`).join('\n');
+        navigator.clipboard.writeText(text).then(() => toast('Otevřené úkoly jsou ve schránce'));
+      });
+      head.append(copy);
+    }
+    const bar = el('div', 'progress tasks-progress');
+    bar.append(el('div', 'progress-fill'));
+    body.append(head, bar);
+  }
+  const list = el('div', 'task-list');
+  tasks.forEach((t, i) => list.append(sheet.editing === t.line ? taskEditor(t) : taskRow(t, i)));
+  if (!tasks.length) list.append(emptyState('Žádné úkoly', 'Ze schůzky nevzešly žádné úkoly. Přidat můžete vlastní.', 'tasks'));
+  body.append(list, addTaskForm());
+  sheet.fresh = null;
+  updateTaskSummary();
+}
+
+function updateTaskSummary() {
+  const tasks = sheet.tasks || [];
+  const done = tasks.filter((t) => t.done).length;
+  const count = $('#sheet-body .tasks-count');
+  if (count) count.textContent = done === tasks.length ? 'Vše hotovo' : `Hotovo ${done} z ${tasks.length}`;
+  const bar = $('#sheet-body .tasks-progress');
+  if (bar) {
+    bar.classList.toggle('complete', done === tasks.length);
+    $('.progress-fill', bar).style.setProperty('--p', tasks.length ? done / tasks.length : 0);
+  }
+}
+
+function taskRow(t, i) {
+  const row = el('div', `task${t.done ? ' done' : ''}${sheet.fresh && !sheet.fresh.has(`${t.line}|${t.raw}`) ? ' added' : ''}`);
+  row.style.setProperty('--i', Math.min(i, 10));
+  const check = el('button', 'task-check');
+  check.type = 'button';
+  check.setAttribute('role', 'checkbox');
+  check.setAttribute('aria-checked', String(t.done));
+  check.setAttribute('aria-label', t.task);
+  check.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5.5 10.4 8.6 13.5 14.6 7" pathLength="1"/></svg>';
+  check.addEventListener('click', () => toggleTask(t, row, check));
+  const main = el('div', 'task-main');
+  const text = el('div', 'task-text', t.task);
+  text.title = 'Dvojklikem upravíte';
+  text.addEventListener('dblclick', () => editTask(t));
+  main.append(text);
+  const meta = el('div', 'task-meta');
+  if (t.owner) {
+    const owner = el('span', `task-owner${isMine(t.owner) ? ' mine' : ''}`);
+    owner.append(el('span', 'avatar', t.owner.trim().charAt(0).toUpperCase()), el('span', '', t.owner));
+    meta.append(owner);
+  }
+  if (t.due) {
+    const due = el('span', 'task-due');
+    due.innerHTML = icon('calendar', 13);
+    due.append(el('span', '', t.due));
+    meta.append(due);
+  }
+  if (meta.childNodes.length) main.append(meta);
+  const actions = el('div', 'task-actions');
+  actions.append(iconButton('pencil', 'Upravit', () => editTask(t)), iconButton('trash', 'Smazat', () => removeTask(t, row)));
+  row.append(check, main, actions);
+  return row;
+}
+
+function editTask(t) {
+  sheet.editing = t.line;
+  renderSheetBody();
+  const input = $('#sheet-body .task-form.editing .task-input');
+  if (input) input.focus();
+}
+
+// Ticking changes one character in the file and no line numbers, so the row
+// updates in place and the checkmark gets to animate.
+async function toggleTask(t, row, check) {
+  const note = sheet.note;
+  const done = !t.done;
+  t.done = done;
+  row.classList.toggle('done', done);
+  row.classList.remove('pop');
+  if (done) {
+    void row.offsetWidth;
+    row.classList.add('pop');
+  }
+  check.setAttribute('aria-checked', String(done));
+  updateTaskSummary();
+  try {
+    await api.updateTask(note.file, { type: 'toggle', line: t.line, raw: t.raw, done });
+  } catch (err) {
+    toast(errText(err), 'error');
+    sheet.tasks = null;
+    await loadSheetTasks();
+  }
+  refreshNotesSoon();
+}
+
+async function changeTasks(op) {
+  const note = sheet.note;
+  try {
+    const tasks = await api.updateTask(note.file, op);
+    if (sheetShows(note)) {
+      sheet.fresh = new Set((sheet.tasks || []).map((t) => `${t.line}|${t.raw}`));
+      sheet.tasks = tasks;
+      sheet.editing = -1;
+      renderSheetBody();
+    }
+    refreshNotesSoon();
+    return true;
+  } catch (err) {
+    toast(errText(err), 'error');
+    sheet.tasks = null;
+    sheet.editing = -1;
+    await loadSheetTasks();
+    return false;
+  }
+}
+
+async function removeTask(t, row) {
+  row.classList.add('leaving');
+  await new Promise((r) => setTimeout(r, 180));
+  if (await changeTasks({ type: 'remove', line: t.line, raw: t.raw })) toast('Úkol je smazaný');
+}
+
+function taskForm(values, { submit, onSubmit, onCancel, onInput, cls }) {
+  const form = el('form', `task-form ${cls}`);
+  const field = (name, placeholder, max) => {
+    const input = el('input', `input task-${name}`);
+    input.type = 'text';
+    input.placeholder = placeholder;
+    input.maxLength = max;
+    input.value = values[name] || '';
+    input.addEventListener('input', () => {
+      ok.disabled = !text.value.trim();
+      if (onInput) onInput({ task: text.value, owner: owner.value, due: due.value });
+    });
+    return input;
+  };
+  const ok = el('button', 'btn btn-primary btn-sm');
+  ok.type = 'submit';
+  const text = field('task', 'Co je potřeba udělat', 400);
+  text.classList.add('task-input');
+  const owner = field('owner', 'Kdo', 80);
+  const due = field('due', 'Termín', 80);
+  ok.innerHTML = icon(onCancel ? 'check' : 'plus', 15);
+  ok.append(el('span', '', submit));
+  ok.disabled = !text.value.trim();
+  const row = el('div', 'task-form-row');
+  row.append(owner, due);
+  if (onCancel) {
+    const cancel = el('button', 'btn btn-ghost btn-sm', 'Zrušit');
+    cancel.type = 'button';
+    cancel.addEventListener('click', onCancel);
+    row.append(cancel);
+  }
+  row.append(ok);
+  form.append(text, row);
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!text.value.trim()) return;
+    ok.disabled = true;
+    await onSubmit({ task: text.value, owner: owner.value, due: due.value });
+    ok.disabled = !text.value.trim();
+  });
+  if (onCancel) {
+    form.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      onCancel();
+    });
+  }
+  return form;
+}
+
+function taskEditor(t) {
+  return taskForm(t, {
+    cls: 'editing',
+    submit: 'Uložit',
+    onSubmit: (v) => changeTasks({ type: 'edit', line: t.line, raw: t.raw, ...v }),
+    onCancel: () => {
+      sheet.editing = -1;
+      renderSheetBody();
+    },
+  });
+}
+
+function addTaskForm() {
+  const wrap = el('div', 'task-add');
+  wrap.append(el('div', 'task-add-label', 'Nový úkol'));
+  wrap.append(taskForm(sheet.draft, {
+    cls: 'adding',
+    submit: 'Přidat',
+    onInput: (v) => (sheet.draft = v),
+    onSubmit: async (v) => {
+      if (!(await changeTasks({ type: 'add', ...v }))) return;
+      sheet.draft = { task: '', owner: v.owner, due: '' };
+      const input = $('#sheet-body .task-form.adding .task-input');
+      if (input) {
+        input.value = '';
+        input.focus();
+      }
+    },
+  }));
+  return wrap;
+}
+
+function renderIssue(body) {
+  const n = sheet.note;
+  const info = ISSUES[n.status];
+  sheet.running = isRunning(n);
+  const card = el('div', `issue${info.soft ? '' : ' bad'}`);
+  const head = el('div', 'issue-head');
+  const ic = el('span', 'issue-icon');
+  ic.innerHTML = icon(info.soft ? 'info' : 'alert', 18);
+  head.append(ic, el('div', 'issue-title', info.title));
+  card.append(head, el('p', 'issue-text', info.text));
+  if (n.issue) card.append(el('div', 'issue-label', 'Co se stalo'), el('pre', 'issue-message', n.issue));
+  const actions = el('div', 'issue-actions');
+  const run = el('button', 'btn btn-primary btn-sm');
+  run.type = 'button';
+  if (sheet.running) {
+    run.disabled = true;
+    run.classList.add('is-loading');
+    run.innerHTML = icon('refresh', 15);
+    run.append(el('span', '', 'Zpracovává se…'));
+  } else {
+    run.innerHTML = icon(info.reprocess ? 'wave' : 'redo', 15);
+    run.append(el('span', '', info.action));
+  }
+  run.addEventListener('click', async () => {
+    run.disabled = true;
+    try {
+      if (await (info.reprocess ? api.reprocessNote(n.file) : api.resummarize(n.file))) toast(info.started);
+      else run.disabled = false;
+    } catch (err) {
+      toast(errText(err), 'error');
+      run.disabled = false;
+    }
+  });
+  const settingsBtn = el('button', 'btn btn-soft btn-sm');
+  settingsBtn.type = 'button';
+  settingsBtn.innerHTML = icon('sliders', 15);
+  settingsBtn.append(el('span', '', `Nastavení · ${info.pageLabel}`));
+  settingsBtn.addEventListener('click', () => {
+    closeNoteSheet();
+    go(info.page);
+  });
+  actions.append(run, settingsBtn);
+  card.append(actions);
+  body.append(card);
+}
+
+let notesTimer = null;
+function refreshNotesSoon() {
+  clearTimeout(notesTimer);
+  notesTimer = setTimeout(refreshNotes, 300);
+}
+
+// ── Note editor (Pilcrow) ────────────────────────────────────────────────
+async function refreshEditor() {
+  try {
+    store.editor = await api.noteEditor();
+  } catch {
+    store.editor = null;
+  }
+  renderEditorHint();
+  if (sheet.note) renderSheetHead();
+}
+
+function renderEditorHint() {
+  const hint = $('#note-editor-hint');
+  hint.replaceChildren();
+  const e = store.editor;
+  if (store.settings.noteEditor === 'system') {
+    hint.textContent = 'Aplikace, kterou má systém nastavenou pro soubory .md.';
+  } else if (e && e.pilcrow) {
+    hint.textContent = 'Poznámka se otevře v Markdown editoru Pilcrow.';
+  } else {
+    hint.append('Pilcrow není nainstalovaný, poznámky se zatím otevřou ve výchozí aplikaci. ');
+    const link = el('a', 'link', 'Stáhnout Pilcrow');
+    link.href = '#';
+    link.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      if (e) api.openUrl(e.download);
+    });
+    hint.append(link);
+  }
 }
 
 // ── AI summaries ───────────────────────────────────────────────────────────
@@ -1558,6 +2112,10 @@ function buildSettings() {
     { value: 'screen-capture', label: 'Nahrávání obrazovky' },
     { value: 'coreaudio-tap', label: 'Core Audio (macOS 14.2+)' },
   ], store.settings.macSystemAudio, (v) => save('macSystemAudio', v).then(() => toast('Projeví se po restartu BRecord')));
+  segmented($('#seg-note-editor'), [
+    { value: 'pilcrow', label: 'Pilcrow' },
+    { value: 'system', label: 'Výchozí aplikace' },
+  ], store.settings.noteEditor || 'pilcrow', (v) => save('noteEditor', v).then(refreshEditor));
   segmented($('#notes-filter'), [
     { value: 'all', label: 'Vše' },
     { value: 'actions', label: 'S úkoly' },
@@ -1778,6 +2336,15 @@ function installDebug() {
         return;
       }
       $('#onboarding').hidden = true;
+      closeNoteSheet();
+      if (name === 'notes-tasks' || name === 'notes-issue') {
+        go('notes');
+        refreshNotes().then(() => {
+          const n = store.notes.find((x) => (name === 'notes-tasks' ? x.tasksTotal : ISSUES[x.status]));
+          if (n) openNoteSheet(n, name === 'notes-tasks' ? 'tasks' : 'issues');
+        });
+        return;
+      }
       if (name === 'general-update') {
         applyState({
           ...store.state,
@@ -1792,17 +2359,27 @@ function installDebug() {
         }, 300);
         return;
       }
-      if (name === 'home' || name === 'home-mic' || name === 'home-recording') {
+      if (name === 'home' || name === 'home-mic' || name === 'home-recording' || name === 'home-processing') {
         go('home');
         if (name === 'home-mic') setTimeout(() => openDevicePicker('mic'), 400);
-        if (name === 'home-recording') {
-          applyState({ ...store.state, phase: 'recording', startedAt: Date.now() - 754000, jobs: [{ name: '2026-09-26-1402', type: 'process', stage: 'transcribing', progress: 0.42, text: 'Přepisuji 42 %' }] });
+        if (name === 'home-recording' || name === 'home-processing') {
+          applyState({ ...store.state, phase: 'recording', startedAt: Date.now() - 754000, jobs: [
+            { id: 'a', name: '2026-09-26-1402', type: 'process', stage: 'transcribing', progress: 0.94, text: 'Přepisuji 94 %' },
+            { id: 'b', name: '2026-09-26-1115', type: 'resummarize', stage: 'summarizing', progress: 0, text: 'Sepisuji shrnutí přes Claude Code…' },
+            { id: 'c', name: '2026-09-26-0930', type: 'process', stage: 'queued', progress: 0, text: 'Ve frontě' },
+          ] });
           fakeTimer = setInterval(() => {
             levels.micT = Math.random() * 0.5;
             levels.sysT = Math.random() * 0.35;
             levels.lastEvent = performance.now();
             ensureLevelLoop();
           }, 50);
+          if (name === 'home-processing') {
+            setTimeout(() => {
+              const card = $('#jobs-card');
+              card.closest('.page').scrollTop = card.offsetTop - 80;
+            }, 300);
+          }
         } else {
           applyState({ ...store.state, phase: 'idle', startedAt: null, jobs: [] });
         }
@@ -1947,6 +2524,11 @@ async function init() {
     listPopover($('#chip-notes-lang'), { header: 'Jazyk poznámek', items: NOTE_LANGS.map(([value, label]) => ({ value, label })), value: store.settings.notesLanguage || 'cs', width: 250, align: 'end', onSelect: (v) => save('notesLanguage', v) }),
   );
   $('#notes-search').addEventListener('input', renderNotes);
+  initNoteSheet();
+  // Back from Pilcrow or another editor: pick up what changed in the notes.
+  window.addEventListener('focus', () => {
+    if (store.page === 'notes' || store.page === 'home' || sheet.note) refreshNotes();
+  });
 
   buildSettings();
   bindInputs();
@@ -1966,6 +2548,7 @@ async function init() {
   refreshNotes();
   refreshCli(false);
   refreshLocal();
+  refreshEditor();
 
   api.on('state', applyState);
   api.on('settings', (s) => {

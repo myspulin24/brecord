@@ -46,10 +46,30 @@ function parseDuration(text) {
   return (h ? Number(h[1]) * 3600 : 0) + (min ? Number(min[1]) * 60 : 0);
 }
 
+// Tasks are the checkbox lines above the transcript, so ones added in an
+// editor count too, while a "- [ ]" someone said out loud never does.
+const TASK_LINE = /^(\s*)[-*] \[([ xX])\] (.*)$/;
+const TASK_PARTS = /^\*\*(.+?)\*\* — (.*?)(?: _\((?:termín|due): (.+?)\)_)?$/;
+const TASKS_HEADING = /^## (?:Úkoly|Action items)$/;
+const NO_TASKS = '_Žádné úkoly._';
+const oneLine = (text, max = 400) => String(text || '').replace(/\s+/g, ' ').trim().slice(0, max);
+
+function taskLine({ owner, task, due, done }) {
+  owner = oneLine(owner, 80);
+  task = oneLine(task);
+  due = oneLine(due, 80);
+  const body = owner ? `**${owner}** — ${task}` : task;
+  return `- [${done ? 'x' : ' '}] ${body}${due ? ` _(termín: ${due})_` : ''}`;
+}
+
+// Owner and task text, case and spacing aside: how a re-summarized note
+// recognises the tasks that were already ticked off.
+const taskKey = (owner, task) => `${oneLine(owner)}|${oneLine(task)}`.toLowerCase();
+
 const bulletList = (items, fallback) => (items && items.length ? items.map((i) => `- ${i}`).join('\n') : `_${fallback}_`);
 const quote = (text) => text.replace(/\n/g, '\n> ');
 
-function renderNote({ startedAt, durationSec, audioFile, transcription, turns, summary, summaryError, transcriptError, pending, warnings = [] }) {
+function renderNote({ startedAt, durationSec, audioFile, transcription, turns, summary, summaryError, transcriptError, pending, warnings = [], doneTasks = [] }) {
   const start = new Date(startedAt);
   const end = new Date(start.getTime() + durationSec * 1000);
   const notes = summary && summary.notes;
@@ -86,8 +106,8 @@ function renderNote({ startedAt, durationSec, audioFile, transcription, turns, s
     out.push('## Úkoly', '');
     out.push(
       notes.action_items.length
-        ? notes.action_items.map((a) => `- [ ] **${a.owner}** — ${a.task}${a.due ? ` _(termín: ${a.due})_` : ''}`).join('\n')
-        : '_Žádné úkoly._',
+        ? notes.action_items.map((a) => taskLine({ ...a, done: doneTasks.includes(taskKey(a.owner, a.task)) })).join('\n')
+        : NO_TASKS,
       '',
     );
   }
@@ -103,10 +123,118 @@ function writeNote(file, data) {
   return file;
 }
 
-function splitNote(md) {
+function transcriptStart(md) {
   let idx = -1;
   for (const m of md.matchAll(TRANSCRIPT_RE)) idx = m.index;
+  return idx;
+}
+
+function splitNote(md) {
+  const idx = transcriptStart(md);
   return idx < 0 ? null : { header: md.slice(0, idx), body: md.slice(idx).replace(/^\n## [^\n]+\n/, '') };
+}
+
+// Checkbox lines of the note's header, each with its line number so a change
+// can be written back to exactly that line.
+function parseTasks(md) {
+  const end = transcriptStart(md);
+  const lines = (end < 0 ? md : md.slice(0, end)).split('\n');
+  const tasks = [];
+  lines.forEach((raw, line) => {
+    const m = raw.match(TASK_LINE);
+    if (!m) return;
+    const body = m[3].trim();
+    const parts = body.match(TASK_PARTS);
+    tasks.push({
+      line,
+      raw: body,
+      done: m[2] !== ' ',
+      owner: parts ? parts[1] : '',
+      task: parts ? parts[2] : body,
+      due: parts && parts[3] ? parts[3] : '',
+    });
+  });
+  return tasks;
+}
+
+function readText(file) {
+  const fd = fs.openSync(file, 'r');
+  try {
+    return fs.readFileSync(fd, 'utf8');
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function readTasks(file) {
+  return parseTasks(readText(file).replace(/\r\n/g, '\n'));
+}
+
+const isSectionEnd = (line) => /^## |^---$/.test(line);
+
+// Ticks, adds, edits or removes one task in the .md file itself. A change to
+// an existing line is refused if that line no longer holds the task the UI
+// showed, e.g. because the note was edited elsewhere in the meantime.
+function updateTask(file, op) {
+  const original = readText(file);
+  const eol = original.includes('\r\n') ? '\r\n' : '\n';
+  const md = original.replace(/\r\n/g, '\n');
+  const lines = md.split('\n');
+  const start = transcriptStart(md);
+  const end = start < 0 ? lines.length : md.slice(0, start).split('\n').length;
+  const heading = lines.findIndex((l, i) => i < end && TASKS_HEADING.test(l));
+
+  if (op.type === 'add') {
+    if (!oneLine(op.task)) throw new Error('Úkol potřebuje text');
+    const line = taskLine({ owner: op.owner, task: op.task, due: op.due });
+    if (heading >= 0) {
+      let next = lines.findIndex((l, i) => i > heading && (i >= end || isSectionEnd(l)));
+      if (next < 0) next = end;
+      const placeholder = lines.findIndex((l, i) => i > heading && i < next && l.trim() === NO_TASKS);
+      if (placeholder >= 0) {
+        lines[placeholder] = line;
+      } else {
+        let last = heading + 1;
+        for (let i = heading + 1; i < next; i++) if (lines[i].trim()) last = i;
+        lines.splice(last + 1, 0, line);
+      }
+    } else {
+      // Notes without a summary have no task list yet: start one above the
+      // divider that separates the transcript.
+      let at = end;
+      while (at > 0 && !lines[at - 1].trim()) at--;
+      if (at > 0 && lines[at - 1] === '---') at--;
+      lines.splice(at, 0, '## Úkoly', '', line, '');
+    }
+  } else {
+    const current = parseTasks(md).find((t) => t.line === op.line);
+    if (!current || current.raw !== op.raw) throw new Error('Poznámka se mezitím změnila. Úkoly jsou znovu načtené.');
+    const indent = lines[op.line].match(TASK_LINE)[1];
+    if (op.type === 'toggle') {
+      lines[op.line] = lines[op.line].replace(/\[[ xX]\]/, op.done ? '[x]' : '[ ]');
+    } else if (op.type === 'edit') {
+      if (!oneLine(op.task)) throw new Error('Úkol potřebuje text');
+      lines[op.line] = indent + taskLine({ owner: op.owner, task: op.task, due: op.due, done: current.done });
+    } else if (op.type === 'remove') {
+      lines.splice(op.line, 1);
+      // The last task gone: put the "no tasks" line back, as a fresh note has.
+      if (heading >= 0 && heading < op.line) {
+        let next = lines.findIndex((l, i) => i > heading && isSectionEnd(l));
+        if (next < 0) next = lines.length;
+        if (!lines.slice(heading + 1, next).some((l) => l.trim())) lines.splice(heading + 1, next - heading - 1, '', NO_TASKS, '');
+      }
+    } else {
+      throw new Error(`Neznámá změna úkolu: ${op.type}`);
+    }
+  }
+  writeFileAtomic(file, lines.join('\n').replace(/\n/g, eol));
+  return readTasks(file);
+}
+
+// The reason a failed note gives, without the Markdown quote around it.
+function noteIssue(md) {
+  const m = md.match(/^> ⚠️ \*\*(?:Přepis se nepodařil|Shrnutí se nepodařilo|Transcription failed|Summary failed)\.?\*\* ?(.*(?:\n> .+)*)/m);
+  return m ? m[1].replace(/\n> /g, '\n').trim() : '';
 }
 
 // Reads back what re-summarizing needs: the transcript turns and header info.
@@ -124,7 +252,8 @@ function readNote(file) {
     startedAt = new Date(y, mo - 1, d, Number(m[2]), Number(m[3]));
     durationSec = parseDuration(m[4].trim());
   }
-  return { turns, startedAt, durationSec, transcription: transcription && transcription.trim(), pending: PENDING_RE.test(md) };
+  const doneTasks = parseTasks(md).filter((t) => t.done).map((t) => taskKey(t.owner, t.task));
+  return { turns, startedAt, durationSec, transcription: transcription && transcription.trim(), pending: PENDING_RE.test(md), doneTasks };
 }
 
 // Overview for the app's note list, newest first.
@@ -164,9 +293,11 @@ function listNotes(dir, { limit = 200 } = {}) {
       else if (/\*\*(Shrnutí se nepodařilo|Summary failed)/.test(md)) status = 'summary-failed';
       else if (!/\n## (Shrnutí|Summary)\n/.test(md)) status = 'transcript-only';
       const summary = (md.match(/\n## (?:Shrnutí|Summary)\n\n- (.+)/) || [])[1] || '';
-      const actions = (md.match(/^- \[ \] /gm) || []).length;
+      const tasks = parseTasks(md);
+      const done = tasks.filter((t) => t.done).length;
       const audio = ['.wav', '.m4a', '.mp3'].map((ext) => path.join(dir, base + ext)).find((p) => fs.existsSync(p)) || null;
-      items.push({ file, base, title, startedAt: startedAt.getTime(), durationSec, status, summary, actions, audio, modified: stat.mtimeMs });
+      const issue = status === 'summary-failed' || status === 'transcript-failed' ? noteIssue(md) : '';
+      items.push({ file, base, title, startedAt: startedAt.getTime(), durationSec, status, summary, actions: tasks.length - done, tasksDone: done, tasksTotal: tasks.length, issue, audio, modified: stat.mtimeMs });
     } catch {
       // unreadable note: skip
     }
@@ -175,4 +306,4 @@ function listNotes(dir, { limit = 200 } = {}) {
   return items.slice(0, limit);
 }
 
-module.exports = { BASE_NAME, PENDING_MARKER, allocateBaseName, dateFromBaseName, formatDuration, listNotes, readNote, renderNote, writeNote };
+module.exports = { BASE_NAME, PENDING_MARKER, allocateBaseName, dateFromBaseName, formatDuration, listNotes, noteIssue, parseTasks, readNote, readTasks, renderNote, taskKey, updateTask, writeNote };

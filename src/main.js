@@ -22,6 +22,7 @@ const fs = require('fs');
 const path = require('path');
 const config = require('./core/config');
 const cli = require('./core/cli-tools');
+const editor = require('./core/editor');
 const { findUnfinished, processRecording, resummarizeNote } = require('./core/pipeline');
 const notes = require('./core/notes');
 const { fixPath, killAll } = require('./core/proc');
@@ -226,7 +227,7 @@ function jobView(job) {
   let text = 'Ve frontě';
   if (s.stage === 'transcribing') text = `Přepisuji${s.progress ? ` ${pct(s.progress)}` : '…'}`;
   else if (s.stage === 'summarizing') text = s.text ? s.text.charAt(0).toUpperCase() + s.text.slice(1) : 'Připravuji shrnutí…';
-  return { name, type: job.type, stage: s.stage || 'queued', progress: s.progress || 0, text };
+  return { id: job.file, name, type: job.type, stage: s.stage || 'queued', progress: s.progress || 0, text };
 }
 
 function buildMenu() {
@@ -255,7 +256,7 @@ function buildMenu() {
     items.push({ label: `Stáhnout BRecord ${up.version}…`, click: () => shell.openExternal(up.releaseUrl) });
   }
   items.push({ label: 'Otevřít BRecord', click: () => showMain('home') });
-  items.push({ label: 'Otevřít poslední poznámku', enabled: !!state.lastNote, click: () => state.lastNote && shell.openPath(state.lastNote) });
+  items.push({ label: 'Otevřít poslední poznámku', enabled: !!state.lastNote, click: () => state.lastNote && openNoteFile(state.lastNote) });
   items.push({ label: 'Otevřít složku s poznámkami', click: openNotesFolder });
   items.push({ type: 'separator' });
   const settings = config.readSettings();
@@ -774,7 +775,7 @@ async function runQueue() {
       const r = job.type === 'resummarize' ? await resummarizeNote(job.file, opts) : await processRecording(job.file, opts);
       state.lastNote = r.noteFile;
       smokeResults.push({ ok: true, ...r, turns: undefined });
-      const open = () => shell.openPath(r.noteFile);
+      const open = () => openNoteFile(r.noteFile);
       if (r.summaryError) notify('Přepis uložen, shrnutí se nepodařilo', firstLine(r.summaryError), open);
       else notify((r.summary && r.summary.notes.title) || 'Poznámky jsou hotové', path.basename(r.noteFile), open);
       if (cfg.settings.openNoteWhenDone && !SMOKE_SECONDS) open();
@@ -813,6 +814,27 @@ function writeFailedNote(job, err) {
 }
 
 // --- Actions ------------------------------------------------------------------
+function openNoteFile(file) {
+  return editor.openNote(file, { editor: config.readSettings().noteEditor, openPath: shell.openPath });
+}
+
+// Paths from the window must name a note in the notes folder, nothing else.
+function uiNote(file) {
+  const target = path.resolve(String(file || ''));
+  const rel = path.relative(path.resolve(config.loadConfig().notesDir), target);
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel) || rel.includes(path.sep) || !/\.md$/i.test(rel)) throw new Error('Tohle není poznámka ze složky s poznámkami');
+  return target;
+}
+
+// The note's own recording, processed again: after fixing transcription.
+function reprocessNote(file) {
+  const noteFile = uiNote(file);
+  const audio = ['.wav', '.m4a', '.mp3', '.flac', '.ogg'].map((ext) => noteFile.replace(/\.md$/i, ext)).find((p) => fs.existsSync(p));
+  if (!audio) throw new Error('Nahrávka k této poznámce už ve složce není');
+  enqueueJob({ type: 'process', file: audio });
+  return true;
+}
+
 function openNotesFolder() {
   const dir = config.loadConfig().notesDir;
   fs.mkdirSync(dir, { recursive: true });
@@ -1045,11 +1067,18 @@ function registerUiIpc() {
   handle('permissions:request-mic', () => requestMicrophone());
 
   handle('notes:list', (limit) => notes.listNotes(config.loadConfig().notesDir, { limit: limit || 200 }));
-  handle('notes:open', (file) => shell.openPath(file));
-  handle('notes:reveal', (file) => shell.showItemInFolder(file));
+  handle('notes:open', (file) => openNoteFile(uiNote(file)));
+  handle('notes:reveal', (file) => shell.showItemInFolder(uiNote(file)));
+  handle('notes:editor', () => ({ pilcrow: editor.findPilcrow(), download: editor.PILCROW_RELEASES }));
+  handle('notes:tasks', (file) => notes.readTasks(uiNote(file)));
+  handle('notes:task', (file, op) => {
+    const { type, line, raw, done, owner, task, due } = op || {};
+    return notes.updateTask(uiNote(file), { type: String(type), line: Number(line), raw: String(raw || ''), done: !!done, owner, task, due });
+  });
+  handle('notes:reprocess', (file) => reprocessNote(file));
   handle('notes:folder', () => openNotesFolder());
   handle('notes:process-file', () => pickAndProcess());
-  handle('notes:resummarize', (file) => pickAndResummarize(file));
+  handle('notes:resummarize', (file) => pickAndResummarize(file && uiNote(file)));
 
   handle('open:path', (p) => {
     const target = config.expandHome(p);
@@ -1088,7 +1117,7 @@ async function captureUi() {
   });
   await new Promise((r) => (wc.isLoading() ? wc.once('did-finish-load', r) : r()));
   fs.mkdirSync(SHOT_DIR, { recursive: true });
-  const scenes = (argValue('scenes') || 'onboarding-0,onboarding-1,home,home-mic,home-recording,notes,ai,transcription,audio,general,experimental').split(',');
+  const scenes = (argValue('scenes') || 'onboarding-0,onboarding-1,home,home-mic,home-recording,home-processing,notes,notes-tasks,notes-issue,ai,transcription,audio,general,experimental').split(',');
   const themes = (argValue('themes') || 'dark').split(',');
   await new Promise((r) => setTimeout(r, 1500));
   for (const theme of themes) {

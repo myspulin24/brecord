@@ -7,6 +7,28 @@ v **Nastavení → Obecné → Aktualizace**, když nabídne novou verzi. Vydán
 záznamu tady se nesestaví. Píše se pro toho, kdo aplikaci používá: co se
 změní v okně, ne které soubory se upravily. Nejnovější verze je nahoře.
 
+## 0.4.0 — nevydáno
+
+### Poznámky
+
+- **Úkoly k odškrtání.** V Poznámkách → S úkoly otevřete poznámku a úkoly
+  označíte jako hotové, přidáte nové, upravíte je nebo smažete. Všechno se
+  zapisuje rovnou do Markdownu (`- [x]`), takže to uvidíte v jakémkoli
+  editoru. U každé poznámky ukazuje počítadlo, kolik úkolů je hotových.
+- **K vyřešení.** Poznámka, které se nepovedl přepis nebo shrnutí, ukáže
+  důvod a nabídne opravu: znovu shrnout, zpracovat nahrávku znovu nebo
+  otevřít příslušné nastavení.
+- **Poznámky se otevírají v Pilcrow**, pokud ho máte nainstalovaný, jinak ve
+  výchozí aplikaci. Přepnout to jde v Nastavení → Obecné.
+- Opakované shrnutí zachová úkoly, které už jste odškrtli.
+- Když se vrátíte z editoru, seznam poznámek se sám obnoví.
+
+### Opravy
+
+- **Zpracování nahrávky má nový ukazatel průběhu:** kruh, který se plynule
+  plní podle přepisu. Předtím se kolem ikony točil useknutý rámeček a animace
+  při každé změně poskočila.
+
 ## 0.3.0 — 2026-09-26
 
 První veřejná verze.

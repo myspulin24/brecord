@@ -54,6 +54,9 @@ Instalátory nejsou podepsané komerčním certifikátem. Na Windows proto Smart
 - **Lokální přepis** přes whisper.cpp s volbou modelu, jazyka a slovníku jmen a zkratek.
 - **Shrnutí v pěti bodech, rozhodnutí a úkoly s vlastníky**, bez API klíčů přes přihlášení v CLI.
 - **Přehled poznámek**, opakované shrnutí a zpracování libovolného zvukového souboru.
+- **Úkoly k odškrtání:** u každé poznámky je označíte jako hotové, přidáte nebo upravíte. Změny se zapisují rovnou do Markdownu jako `- [x]`.
+- **K vyřešení:** u poznámky, které se nepovedl přepis nebo shrnutí, vidíte důvod a opravíte ji jedním tlačítkem.
+- **Otevírání v [Pilcrow](https://github.com/myspulin24/pilcrow)**, pokud ho máte nainstalovaný, jinak ve výchozí aplikaci pro `.md`.
 - **Pojistky:** zvuk se zapisuje průběžně, po pádu se nahrávka obnoví a přepis se uloží dřív, než se žádá o shrnutí.
 
 ### Co je potřeba

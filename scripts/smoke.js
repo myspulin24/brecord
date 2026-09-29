@@ -15,7 +15,7 @@ const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
 const DIST = path.join(ROOT, 'dist');
 const OUT = path.join(ROOT, 'smoke-output');
-const SCENES = ['onboarding-0', 'onboarding-1', 'home', 'home-recording', 'notes', 'ai', 'transcription', 'audio', 'general', 'general-update', 'experimental'];
+const SCENES = ['onboarding-0', 'onboarding-1', 'home', 'home-recording', 'home-processing', 'notes', 'notes-tasks', 'notes-issue', 'ai', 'transcription', 'audio', 'general', 'general-update', 'experimental'];
 const TIMEOUT_MS = 4 * 60 * 1000;
 
 function findApp() {
@@ -35,7 +35,9 @@ function main() {
   const app = findApp();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'brecord-smoke-'));
   // Own notes folder too: the smoke run must never read the user's notes.
-  fs.writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ onboarded: true, notesDir: path.join(home, 'notes') }));
+  const notesDir = path.join(home, 'notes');
+  fs.writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ onboarded: true, notesDir }));
+  seedNotes(notesDir);
   fs.rmSync(OUT, { recursive: true, force: true });
   const args = [`--screenshot=${OUT}`, `--scenes=${SCENES.join(',')}`, '--themes=dark,light'];
   // Ubuntu runners restrict unprivileged user namespaces, which Chromium's
@@ -67,6 +69,20 @@ function main() {
     if (small.length) return fail(`Podezřele prázdné snímky: ${small.join(', ')}`, output);
     console.log(`OK: ${shots.length} obrazovek bez chyb (${OUT})`);
   });
+}
+
+// One note with tasks and one whose summary failed, so the task and problem
+// sheets have something to show.
+function seedNotes(dir) {
+  const notes = require('../src/core/notes');
+  fs.mkdirSync(dir, { recursive: true });
+  const turns = [{ start: 1, end: 4, speaker: 'Já', text: 'Tak začneme.' }];
+  const items = [{ owner: 'Petra', task: 'Připravit tiskovou zprávu', due: 'pátek' }, { owner: 'Já', task: 'Aktualizovat ceník', due: '' }];
+  const file = path.join(dir, '2026-09-26-0930.md');
+  notes.writeNote(file, { startedAt: new Date(2026, 8, 26, 9, 30), durationSec: 1800, turns, summary: { provider: 'Claude Code', notes: { title: 'Plánování vydání', summary: ['Web se spustí 14. října.'], decisions: [], action_items: items } } });
+  const [first] = notes.readTasks(file);
+  notes.updateTask(file, { type: 'toggle', line: first.line, raw: first.raw, done: true });
+  notes.writeNote(path.join(dir, '2026-09-25-1400.md'), { startedAt: new Date(2026, 8, 25, 14, 0), durationSec: 900, turns, summaryError: 'Claude Code: rate limit' });
 }
 
 function fail(message, output) {

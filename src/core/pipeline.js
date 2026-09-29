@@ -73,7 +73,7 @@ async function resummarizeNote(noteFile, { cfg, onStatus = () => {}, signal } = 
   onStatus({ stage: 'summarizing' });
   try {
     const summary = await summarize(note.turns, cfg, { meta: common, signal, onStatus: (text) => onStatus({ stage: 'summarizing', text }) });
-    writeNote(noteFile, { ...common, summary, warnings: summary.warnings.map((w) => `Použito záložní shrnutí: ${w}`) });
+    writeNote(noteFile, { ...common, summary, doneTasks: note.doneTasks, warnings: summary.warnings.map((w) => `Použito záložní shrnutí: ${w}`) });
     return { noteFile, summary };
   } catch (err) {
     if (signal && signal.aborted) throw err;
