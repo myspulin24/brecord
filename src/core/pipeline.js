@@ -7,7 +7,8 @@ const path = require('path');
 const { applyToTurns, parseGlossary } = require('./glossary');
 const { BASE_NAME, dateFromBaseName, readNote, writeNote } = require('./notes');
 const { summarize } = require('./summarize');
-const { buildTurns } = require('./transcript');
+const { installSpeakerModels, loadVoices, runDiarization, saveNoteVoices, speakerModelsInstalled } = require('./speakers');
+const { buildTurns, diarizationChannel } = require('./transcript');
 const { transcribe } = require('./transcribe');
 const { analyzeWav, readWavInfo, repairWav } = require('./wav');
 
@@ -40,7 +41,34 @@ async function processRecording(audioFile, { cfg, meta = {}, onStatus = () => {}
     onProgress: (progress) => onStatus({ stage: 'transcribing', progress }),
   });
   warnings.push(...transcript.warnings.map((w) => `Použit záložní lokální přepis: ${w}`));
-  const turns = applyToTurns(buildTurns(transcript.segments, analysis).turns, parseGlossary(cfg.settings.transcription.prompt));
+
+  // Who is who: optional, so a failure here costs the labels, not the note.
+  let diar = null;
+  const channel = cfg.settings.speakers.enabled !== false ? diarizationChannel(analysis) : null;
+  if (channel != null) {
+    onStatus({ stage: 'speakers' });
+    try {
+      if (!speakerModelsInstalled()) {
+        onStatus({ stage: 'speakers', text: 'Stahuji modely pro rozpoznání mluvčích…' });
+        await installSpeakerModels({ signal });
+        onStatus({ stage: 'speakers' });
+      }
+      diar = { channel, ...(await runDiarization(file, { channel, numSpeakers: meta.numSpeakers, signal })) };
+    } catch (err) {
+      if (signal && signal.aborted) throw err;
+      warnings.push(`Mluvčí se nepodařilo rozlišit: ${String(err.message).split('\n')[0]}`);
+    }
+  }
+  const built = buildTurns(transcript.segments, analysis, { diar, voices: diar ? loadVoices() : [] });
+  const turns = applyToTurns(built.turns, parseGlossary(cfg.settings.transcription.prompt));
+  if (built.speakerVoices) saveNoteVoices(noteFile, built.speakerVoices);
+  // Processing a note again (to tell speakers apart) keeps what was ticked off.
+  let doneTasks = [];
+  try {
+    if (fs.existsSync(noteFile)) doneTasks = readNote(noteFile).doneTasks;
+  } catch {
+    // a failed note has no tasks to keep
+  }
   const common = { startedAt, durationSec: durationSec || (turns.length ? turns[turns.length - 1].end : 0), audioFile: file, transcription: transcript.engine, turns, warnings };
 
   if (!turns.length || cfg.settings.summary.provider === 'none') {
@@ -53,7 +81,7 @@ async function processRecording(audioFile, { cfg, meta = {}, onStatus = () => {}
   try {
     const summary = await summarize(turns, cfg, { meta: common, signal, onStatus: (text) => onStatus({ stage: 'summarizing', text }) });
     for (const w of summary.warnings) common.warnings.push(`Použito záložní shrnutí: ${w}`);
-    writeNote(noteFile, { ...common, summary });
+    writeNote(noteFile, { ...common, summary, doneTasks });
     return { noteFile, turns, summary };
   } catch (err) {
     if (signal && signal.aborted) throw err; // leave the pending marker so it resumes next launch

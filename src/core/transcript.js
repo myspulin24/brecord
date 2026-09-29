@@ -1,5 +1,6 @@
 // Turns raw ASR segments into readable speaker turns and back.
 'use strict';
+const { clusterAt, labelClusters } = require('./speakers');
 const { meanRms, peakRms } = require('./wav');
 
 // Below this (~ -50 dBFS) a stretch of audio is treated as silence.
@@ -29,6 +30,23 @@ function speechLevel(arr) {
   if (loud.length < 10) return 0;
   loud.sort((a, b) => a - b);
   return loud[Math.floor(loud.length * 0.95)];
+}
+
+// Split between words, whisper.cpp times the last word of a sentence badly,
+// often as a sliver inside the following pause. Such a sliver belongs to the
+// segment right before it; on its own it would look like silence and be dropped.
+function joinFragments(segments) {
+  const out = [];
+  for (const seg of segments) {
+    const prev = out[out.length - 1];
+    if (prev && seg.end - seg.start < 0.6 && seg.start - prev.end <= 0.3) {
+      prev.text = `${prev.text.trim()} ${seg.text.trim()}`;
+      prev.end = Math.max(prev.end, seg.end);
+    } else {
+      out.push(seg);
+    }
+  }
+  return out;
 }
 
 // Whisper happily invents text for silence ("Thank you for watching").
@@ -62,6 +80,41 @@ function labelSpeakers(segments, analysis) {
   return true;
 }
 
+// Which channel holds the people worth telling apart: the system audio when
+// anyone spoke through it, otherwise the microphone (an in-room meeting).
+function diarizationChannel(analysis) {
+  if (!analysis || !analysis.rms.length) return null;
+  if (analysis.rms.length > 1 && speechLevel(analysis.rms[1])) return 1;
+  return speechLevel(analysis.rms[0]) ? 0 : null;
+}
+
+// Voices found by diarization replace "Ostatní" with one label per person;
+// the microphone stays "Já". On the microphone alone a single voice is just
+// the recorder and gets no label. Returns label → voiceprint for the note.
+function labelVoices(segments, diar, voices = []) {
+  if (!diar || !diar.segments.length) return null;
+  // On the system channel everything but the microphone's "Já" is someone
+  // else, including segments left unlabelled because the mic stayed silent.
+  const targets = segments.filter((seg) => (diar.channel === 1 ? seg.speaker !== ME : true));
+  for (const seg of targets) seg.cluster = clusterAt(diar, seg.start, Math.max(seg.end, seg.start + 0.1));
+  const clusters = new Set(targets.map((seg) => seg.cluster));
+  if (diar.channel === 0 && clusters.size < 2) {
+    for (const seg of targets) delete seg.cluster;
+    return null;
+  }
+  const { labels, named } = labelClusters(diar, targets, voices);
+  for (const seg of targets) {
+    seg.speaker = labels.get(seg.cluster);
+    delete seg.cluster;
+  }
+  const out = {};
+  for (const sp of diar.speakers) {
+    const label = labels.get(sp.id);
+    if (label && sp.embedding) out[label] = { embedding: sp.embedding, seconds: sp.seconds, auto: named.has(sp.id) };
+  }
+  return out;
+}
+
 // Merges consecutive segments into paragraphs: same speaker, short gap,
 // and not longer than maxSec so timestamps stay useful.
 function mergeTurns(segments, { maxGap = 2.5, maxSec = 75 } = {}) {
@@ -78,10 +131,12 @@ function mergeTurns(segments, { maxGap = 2.5, maxSec = 75 } = {}) {
   return turns;
 }
 
-function buildTurns(segments, analysis) {
-  const kept = dropHallucinations(segments.map((s) => ({ ...s })), analysis);
-  const labelled = labelSpeakers(kept, analysis);
-  return { turns: mergeTurns(kept), labelled };
+function buildTurns(segments, analysis, { diar, voices } = {}) {
+  const kept = dropHallucinations(joinFragments(segments.map((s) => ({ ...s }))), analysis);
+  let labelled = labelSpeakers(kept, analysis);
+  const speakerVoices = labelVoices(kept, diar, voices);
+  if (speakerVoices) labelled = true;
+  return { turns: mergeTurns(kept), labelled, speakerVoices };
 }
 
 // Markdown transcript line: **[00:01:23] Me:** text   (speaker optional)
@@ -112,4 +167,4 @@ function turnsToPlain(turns) {
   return turns.map((t) => `[${formatTimestamp(t.start)}]${t.speaker ? ` ${t.speaker}:` : ''} ${t.text}`).join('\n');
 }
 
-module.exports = { ME, THEM, SILENCE_RMS, buildTurns, dropHallucinations, formatTimestamp, labelSpeakers, markdownToTurns, mergeTurns, parseTimestamp, turnsToMarkdown, turnsToPlain };
+module.exports = { ME, THEM, SILENCE_RMS, buildTurns, diarizationChannel, dropHallucinations, joinFragments, formatTimestamp, labelSpeakers, labelVoices, markdownToTurns, mergeTurns, parseTimestamp, turnsToMarkdown, turnsToPlain };

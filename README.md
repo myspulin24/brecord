@@ -22,7 +22,7 @@
 
 ## Přehled
 
-BRecord nahraje schůzku jedním kliknutím: váš mikrofon i hlas ostatních účastníků ze zvuku počítače. Přepis udělá lokálně [whisper.cpp](https://github.com/ggml-org/whisper.cpp). Shrnutí, rozhodnutí a úkoly s vlastníky sepíše Claude Code nebo Codex, do kterých už jste přihlášeni. Výsledek je obyčejný Markdown ve složce `~/MeetingNotes` a vedle něj zvuková nahrávka.
+BRecord nahraje schůzku jedním kliknutím: váš mikrofon i hlas ostatních účastníků ze zvuku počítače. Přepis udělá lokálně [whisper.cpp](https://github.com/ggml-org/whisper.cpp) a podle hlasu rozliší, kdo mluví. Shrnutí, rozhodnutí a úkoly s vlastníky sepíše Claude Code nebo Codex, do kterých už jste přihlášeni. Výsledek je obyčejný Markdown ve složce `~/MeetingNotes` a vedle něj zvuková nahrávka.
 
 | | |
 | --- | --- |
@@ -49,9 +49,10 @@ Instalátory nejsou podepsané komerčním certifikátem. Na Windows proto Smart
 
 ## Funkce
 
-- **Nahrávání mikrofonu i zvuku počítače** do jedné stopy. V přepisu jsou mluvčí rozlišení jako „Já“ a „Ostatní“.
+- **Nahrávání mikrofonu i zvuku počítače** do jedné stopy.
+- **Rozlišení mluvčích podle hlasu** přímo v počítači. Mluvčí pojmenujete v poznámce a BRecord si hlasy zapamatuje, takže je příště pozná sám.
 - **Výběr vstupu a výstupu** přímo na domovské obrazovce. U Teams a Zoomu zvolte komunikační zařízení.
-- **Lokální přepis** přes whisper.cpp s volbou modelu, jazyka a slovníku jmen a zkratek.
+- **Lokální přepis** přes whisper.cpp s volbou modelu a jazyka. **Slovník** jmen a pojmů platí pro přepis i shrnutí a opraví i to, co přepis plete (`SyteLine = Sideline`).
 - **Shrnutí v pěti bodech, rozhodnutí a úkoly s vlastníky**, bez API klíčů přes přihlášení v CLI.
 - **Přehled poznámek**, opakované shrnutí a zpracování libovolného zvukového souboru.
 - **Úkoly k odškrtání:** u každé poznámky je označíte jako hotové, přidáte nebo upravíte. Změny se zapisují rovnou do Markdownu jako `- [x]`.
@@ -79,7 +80,7 @@ Instalátory nejsou podepsané komerčním certifikátem. Na Windows proto Smart
 
 ## Soukromí
 
-Bez účtů, bez cloudového úložiště, bez telemetrie. Zvuk i poznámky zůstávají ve vaší složce. Ven odchází jen text přepisu k poskytovateli shrnutí, kterého zvolíte (s Ollamou nikam), a kontrola aktualizací na GitHubu. Tu lze vypnout v *Nastavení → Obecné* nebo proměnnou `BRECORD_AUTO_UPDATE=0`. Při spouštění Claude Code a Codexu BRecord vypíná jejich historii relací i telemetrii.
+Bez účtů, bez cloudového úložiště, bez telemetrie. Zvuk i poznámky zůstávají ve vaší složce. Hlasové otisky zapamatovaných mluvčích jsou jen v `~/.brecord/voices.json` a v *Nastavení → Přepis* je jde zapomenout. Ven odchází jen text přepisu k poskytovateli shrnutí, kterého zvolíte (s Ollamou nikam), a kontrola aktualizací na GitHubu. Tu lze vypnout v *Nastavení → Obecné* nebo proměnnou `BRECORD_AUTO_UPDATE=0`. Při spouštění Claude Code a Codexu BRecord vypíná jejich historii relací i telemetrii.
 
 ## Vývoj
 
@@ -97,6 +98,7 @@ npm start
 | `npm run lint` | ESLint |
 | `npm run e2e` | přepis syntetické řeči přes whisper.cpp (potřebuje `espeak-ng`) |
 | `npm run pack && npm run smoke` | sestavení a průchod všemi obrazovkami mimo displej |
+| `npm run smoke:speakers` | rozpoznání mluvčích v sestavené aplikaci (po `pack`) |
 | `npm run dist:win` · `dist:mac` · `dist:linux` | instalátory |
 
 CI spouští lint, testy na Windows, macOS i Linuxu, end-to-end přepis, sestavení a smoke test aplikace a analýzu CodeQL.
@@ -106,3 +108,5 @@ CI spouští lint, testy na Windows, macOS i Linuxu, end-to-end přepis, sestave
 ## Licence
 
 [MIT](LICENSE) © 2026 Michal Jašek
+
+Rozpoznání mluvčích stojí na [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (Apache 2.0) s modely [pyannote segmentation 3.0](https://huggingface.co/pyannote/segmentation-3.0) (MIT) a [3D-Speaker CAM++](https://github.com/modelscope/3D-Speaker) (Apache 2.0). Modely se stahují při prvním použití a ověřují kontrolním součtem.

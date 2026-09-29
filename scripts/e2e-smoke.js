@@ -71,6 +71,9 @@ async function main() {
   if (!md.includes('## Přepis')) throw new Error('Poznámka nemá oddíl s přepisem');
   if (hits.length < 3) throw new Error(`V přepisu se našla jen slova: ${hits.join(', ') || '(žádné)'}`);
   if (md.includes('Shrnutí se nepodařilo') || md.includes('Přepis se nepodařil')) throw new Error('Poznámka hlásí chybu');
+  // Speaker recognition ran too (worker process, native module, models):
+  // one voice on the microphone leaves the transcript without labels.
+  if (md.includes('Mluvčí se nepodařilo rozlišit')) throw new Error(`Rozpoznání mluvčích selhalo: ${(md.match(/Mluvčí se nepodařilo rozlišit: [^\n]*/) || [''])[0]}`);
   console.log(`OK: nalezena slova ${hits.join(', ')}`);
   fs.rmSync(work, { recursive: true, force: true });
 }

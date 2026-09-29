@@ -40,16 +40,32 @@ const CLI_TIMEOUT_MS = 20 * 60 * 1000;
 const LANGUAGES = { cs: 'Czech', en: 'English', sk: 'Slovak', de: 'German', pl: 'Polish' };
 const estimateTokens = (text) => Math.ceil(text.length / 3.2);
 
-function systemPrompt({ myName, notesLanguage, labelled, glossary = [] }) {
+// What the speaker labels mean. With voice recognition they are people
+// (named or "Mluvčí N"); without it only microphone vs computer audio.
+function speakerPrompt({ me, myName, labelled, speakers }) {
+  const voices = speakers.filter((l) => l !== ME && l !== THEM);
+  if (voices.length) {
+    const generic = voices.filter((l) => /^Mluvčí \d+$/.test(l));
+    const named = voices.filter((l) => !generic.includes(l));
+    return [
+      `Speaker labels come from voice recognition. "${ME}" (Czech for "me") is ${me}${myName && named.includes(myName) ? `, and so is "${myName}"` : ''}.`,
+      named.length ? `${named.map((l) => `"${l}"`).join(', ')} ${named.length > 1 ? 'are participants' : 'is a participant'} recognised by name.` : '',
+      generic.length ? `Labels like "${generic[0]}" (Czech for "speaker ${generic[0].split(' ')[1]}") are distinct voices whose names are not known: when the conversation makes clear who one of them is (they are addressed by name or introduce themselves), use that name; otherwise keep the label.` : '',
+      'Labels can be wrong on short or overlapping turns.',
+    ].filter(Boolean).join(' ');
+  }
+  if (labelled) return `Speaker labels: "${ME}" (Czech for "me") is ${me}, captured by their microphone. "${THEM}" (Czech for "others") is everyone heard through the computer's audio, i.e. the remote participants. Labels are inferred from audio levels and can be wrong on short or overlapping turns.`;
+  return 'The transcript has no speaker labels; attribute statements to people only when it is clear from context.';
+}
+
+function systemPrompt({ myName, notesLanguage, labelled, glossary = [], speakers = [] }) {
   const code = notesLanguage || 'cs';
   const language = code === 'auto' ? null : LANGUAGES[code] || code;
   const me = myName ? `${myName} (labelled "${ME}")` : `the person who recorded it (labelled "${ME}")`;
   return [
     'You turn a raw meeting transcript into concise, accurate meeting notes.',
     'The transcript comes from automatic speech recognition: expect misheard words, missing punctuation and no speaker names. Silently fix obvious recognition errors when the meaning is clear.',
-    labelled
-      ? `Speaker labels: "${ME}" (Czech for "me") is ${me}, captured by their microphone. "${THEM}" (Czech for "others") is everyone heard through the computer's audio, i.e. the remote participants. Labels are inferred from audio levels and can be wrong on short or overlapping turns.`
-      : 'The transcript has no speaker labels; attribute statements to people only when it is clear from context.',
+    speakerPrompt({ me, myName, labelled, speakers }),
     ...glossaryPrompt(glossary),
     '',
     'Produce:',
@@ -348,7 +364,8 @@ async function resolvePlan(cfg) {
 async function summarizeWith(id, turns, cfg, { meta, signal, onStatus } = {}) {
   const provider = PROVIDERS[id];
   const s = cfg.settings;
-  const system = systemPrompt({ myName: s.myName, notesLanguage: s.notesLanguage, labelled: turns.some((t) => t.speaker), glossary: parseGlossary(s.transcription.prompt) });
+  const speakers = [...new Set(turns.map((t) => t.speaker).filter(Boolean))];
+  const system = systemPrompt({ myName: s.myName, notesLanguage: s.notesLanguage, labelled: speakers.length > 0, glossary: parseGlossary(s.transcription.prompt), speakers });
   const header = meetingHeader(meta);
   const transcript = turnsToPlain(turns);
   let model;

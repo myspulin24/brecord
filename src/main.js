@@ -27,6 +27,8 @@ const { findUnfinished, processRecording, resummarizeNote } = require('./core/pi
 const notes = require('./core/notes');
 const { fixPath, killAll } = require('./core/proc');
 const setup = require('./core/setup');
+const speakers = require('./core/speakers');
+const { ME, THEM } = require('./core/transcript');
 const { PROVIDERS, ollamaModels, resolvePlan, testProvider } = require('./core/summarize');
 const { describePlan, localWhisper, modelPath } = require('./core/transcribe');
 const { WavWriter } = require('./core/wav');
@@ -45,6 +47,9 @@ const argValue = (name) => {
 const SMOKE_SECONDS = Number(argValue('smoke-test')) || 0;
 // Development: render the UI off-screen into PNGs and exit.
 const SHOT_DIR = argValue('screenshot');
+// CI: tell the speakers of a WAV apart in the packaged app (worker process,
+// native module, models) and exit. Models must already be in BRECORD_HOME.
+const DIARIZE_TEST = argValue('diarize-test');
 const START_HIDDEN = process.argv.includes('--hidden');
 
 const PRIVACY_URL = {
@@ -226,6 +231,7 @@ function jobView(job) {
   const s = job.status || {};
   let text = 'Ve frontě';
   if (s.stage === 'transcribing') text = `Přepisuji${s.progress ? ` ${pct(s.progress)}` : '…'}`;
+  else if (s.stage === 'speakers') text = s.text || 'Rozlišuji mluvčí…';
   else if (s.stage === 'summarizing') text = s.text ? s.text.charAt(0).toUpperCase() + s.text.slice(1) : 'Připravuji shrnutí…';
   return { id: job.file, name, type: job.type, stage: s.stage || 'queued', progress: s.progress || 0, text };
 }
@@ -827,13 +833,64 @@ function uiNote(file) {
   return target;
 }
 
-// The note's own recording, processed again: after fixing transcription.
-function reprocessNote(file) {
+const noteAudio = (noteFile) => ['.wav', '.m4a', '.mp3', '.flac', '.ogg'].map((ext) => noteFile.replace(/\.md$/i, ext)).find((p) => fs.existsSync(p)) || null;
+
+// The note's own recording, processed again: after fixing transcription, or
+// to tell the speakers apart (optionally with a known number of them).
+function reprocessNote(file, { numSpeakers } = {}) {
   const noteFile = uiNote(file);
-  const audio = ['.wav', '.m4a', '.mp3', '.flac', '.ogg'].map((ext) => noteFile.replace(/\.md$/i, ext)).find((p) => fs.existsSync(p));
+  const audio = noteAudio(noteFile);
   if (!audio) throw new Error('Nahrávka k této poznámce už ve složce není');
-  enqueueJob({ type: 'process', file: audio });
+  const n = Math.round(Number(numSpeakers) || 0);
+  enqueueJob({ type: 'process', file: audio, meta: n > 0 && n <= 12 ? { numSpeakers: n } : undefined });
   return true;
+}
+
+// Names given in a note: written into its transcript, remembered as voices
+// for next time, then the summary is written again with the names.
+function saveSpeakerNames(file, mapping) {
+  const noteFile = uiNote(file);
+  const applied = notes.renameSpeakers(noteFile, mapping);
+  const renamed = Object.entries(applied);
+  if (!renamed.length) return { applied, learned: [] };
+  const myName = (config.readSettings().myName || '').trim().toLowerCase();
+  const prints = speakers.loadNoteVoices(noteFile);
+  const voices = speakers.loadVoices();
+  const learned = [];
+  const next = { ...prints };
+  for (const [from, to] of renamed) {
+    const print = prints[from];
+    delete next[from];
+    if (!print) continue;
+    next[to] = next[to] ? { ...next[to], seconds: next[to].seconds + print.seconds } : { ...print, auto: false };
+    const own = to === ME || to === THEM || to.toLowerCase() === myName;
+    if (!own && !speakers.GENERIC.test(to) && print.embedding) {
+      speakers.learnVoice(voices, to, print.embedding, print.seconds || 1);
+      learned.push(to);
+    }
+  }
+  if (learned.length) speakers.saveVoices(voices);
+  speakers.saveNoteVoices(noteFile, next);
+  enqueueJob({ type: 'resummarize', file: noteFile });
+  sendToUi('notes:changed');
+  return { applied, learned };
+}
+
+async function installSpeakerModels() {
+  try {
+    await speakers.installSpeakerModels({
+      onProgress: (p) => {
+        state.task = `Stahuji modely pro rozpoznání mluvčích ${pct(p)}`;
+        updateTraySoon();
+      },
+    });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  } finally {
+    state.task = null;
+    updateTray();
+  }
 }
 
 function openNotesFolder() {
@@ -1079,7 +1136,20 @@ function registerUiIpc() {
     const { type, line, raw, done, owner, task, due } = op || {};
     return notes.updateTask(uiNote(file), { type: String(type), line: Number(line), raw: String(raw || ''), done: !!done, owner, task, due });
   });
-  handle('notes:reprocess', (file) => reprocessNote(file));
+  handle('notes:reprocess', (file, opts) => reprocessNote(file, opts));
+  handle('notes:speakers', (file) => {
+    const noteFile = uiNote(file);
+    const prints = speakers.loadNoteVoices(noteFile);
+    const info = notes.noteSpeakers(noteFile);
+    return { ...info, speakers: info.speakers.map((sp) => ({ ...sp, auto: !!(prints[sp.label] && prints[sp.label].auto) })), audio: noteAudio(noteFile) };
+  });
+  handle('notes:speakers-save', (file, mapping) => saveSpeakerNames(file, mapping));
+  handle('speakers:status', () => ({ installed: speakers.speakerModelsInstalled(), mb: speakers.MODELS_MB, voices: speakers.loadVoices().map((v) => ({ name: v.name, seconds: Math.round(v.seconds || 0) })) }));
+  handle('speakers:install', () => installSpeakerModels());
+  handle('speakers:forget', (name) => {
+    speakers.forgetVoice(String(name || ''));
+    return true;
+  });
   handle('notes:folder', () => openNotesFolder());
   handle('notes:process-file', () => pickAndProcess());
   handle('notes:resummarize', (file) => pickAndResummarize(file && uiNote(file)));
@@ -1121,7 +1191,7 @@ async function captureUi() {
   });
   await new Promise((r) => (wc.isLoading() ? wc.once('did-finish-load', r) : r()));
   fs.mkdirSync(SHOT_DIR, { recursive: true });
-  const scenes = (argValue('scenes') || 'onboarding-0,onboarding-1,home,home-mic,home-recording,home-processing,notes,notes-tasks,notes-issue,ai,transcription,audio,general,experimental,update-offer').split(',');
+  const scenes = (argValue('scenes') || 'onboarding-0,onboarding-1,home,home-mic,home-recording,home-processing,notes,notes-tasks,notes-issue,notes-speakers,ai,transcription,audio,general,experimental,update-offer').split(',');
   const themes = (argValue('themes') || 'dark').split(',');
   await new Promise((r) => setTimeout(r, 1500));
   for (const theme of themes) {
@@ -1160,9 +1230,20 @@ function finishSmokeTest() {
 // --- App lifecycle --------------------------------------------------------------
 // Dev screenshots use their own profile so they never touch (or get blocked
 // by) a BRecord the user is running.
-if (SHOT_DIR) app.setPath('userData', path.join(app.getPath('temp'), 'brecord-screenshot-profile'));
+if (SHOT_DIR || DIARIZE_TEST) app.setPath('userData', path.join(app.getPath('temp'), 'brecord-screenshot-profile'));
 
-if (!SHOT_DIR && !app.requestSingleInstanceLock()) {
+if (DIARIZE_TEST) {
+  app.whenReady().then(async () => {
+    try {
+      const r = await speakers.runDiarization(DIARIZE_TEST, { channel: 0 });
+      console.log(`DIARIZE_RESULT ${JSON.stringify({ ok: true, segments: r.segments.length, speakers: r.speakers.map((sp) => ({ seconds: sp.seconds, embedding: !!sp.embedding })) })}`);
+      app.exit(0);
+    } catch (err) {
+      console.log(`DIARIZE_RESULT ${JSON.stringify({ ok: false, error: err.message })}`);
+      app.exit(1);
+    }
+  });
+} else if (!SHOT_DIR && !app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on('second-instance', () => showMain());

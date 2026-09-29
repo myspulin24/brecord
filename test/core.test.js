@@ -438,3 +438,101 @@ test('the system app opens notes when Pilcrow is not wanted', async () => {
   assert.equal(where, 'system');
   assert.deepEqual(opened, ['x.md']);
 });
+
+test('word fragments whisper times into the pause stay with their sentence', () => {
+  const segs = [
+    { start: 2.44, end: 5.2, text: 'with the release plan for the new' },
+    { start: 5.2, end: 5.28, text: 'website.' },
+    { start: 6.08, end: 9.08, text: 'Thanks. The checkout' },
+    { start: 12, end: 12.2, text: 'Ok.' },
+  ];
+  assert.deepEqual(transcript.joinFragments(segs).map((s) => s.text), ['with the release plan for the new website.', 'Thanks. The checkout', 'Ok.']);
+});
+
+test('voices from diarization label the others, the microphone stays "Já"', () => {
+  const diar = {
+    channel: 1,
+    segments: [
+      { start: 0, end: 5, speaker: 7 },
+      { start: 6, end: 10, speaker: 3 },
+      { start: 11, end: 14, speaker: 7 },
+    ],
+    speakers: [
+      { id: 7, seconds: 8, embedding: [1, 0, 0] },
+      { id: 3, seconds: 4, embedding: [0, 1, 0] },
+    ],
+  };
+  const segs = [
+    { start: 0.2, end: 4.8, text: 'Dobrý den.', speaker: 'Ostatní' },
+    { start: 6.1, end: 9.5, text: 'Ahoj.', speaker: 'Ostatní' },
+    { start: 10, end: 10.8, text: 'Já taky.', speaker: 'Já' },
+    { start: 11.2, end: 13.9, text: 'Tak začneme.' }, // the mic was silent: no channel label
+  ];
+  const prints = transcript.labelVoices(segs, diar, [{ name: 'Petra', embedding: [0, 1, 0.05] }]);
+  assert.deepEqual(segs.map((s) => s.speaker), ['Mluvčí 1', 'Petra', 'Já', 'Mluvčí 1']);
+  assert.deepEqual(Object.keys(prints).sort(), ['Mluvčí 1', 'Petra']);
+  assert.equal(prints.Petra.auto, true);
+  assert.equal(prints['Mluvčí 1'].auto, false);
+
+  // One voice on the microphone alone is just the recorder: no labels.
+  const mic = [{ start: 0, end: 3, text: 'Diktát.' }];
+  assert.equal(transcript.labelVoices(mic, { channel: 0, segments: [{ start: 0, end: 3, speaker: 0 }], speakers: [{ id: 0, seconds: 3, embedding: [1] }] }), null);
+  assert.equal(mic[0].speaker, undefined);
+
+  // A segment nothing overlaps goes to the nearest voice.
+  const speakers = require('../src/core/speakers');
+  assert.equal(speakers.clusterAt(diar, 5.2, 5.8), 7);
+});
+
+test('remembered voices name a speaker only when clearly closest', () => {
+  const speakers = require('../src/core/speakers');
+  const voices = [
+    { name: 'Petra', embedding: [1, 0, 0], seconds: 30 },
+    { name: 'Jana', embedding: [0, 1, 0], seconds: 30 },
+  ];
+  const found = [
+    { id: 1, embedding: [0.95, 0.05, 0.1] },
+    { id: 2, embedding: [0.7, 0.7, 0] }, // between the two: stays unnamed
+    { id: 3, embedding: [0.9, 0.1, 0.1] }, // Petra again, but less sure than id 1
+  ];
+  assert.deepEqual([...speakers.matchVoices(found, voices)], [[1, 'Petra']]);
+
+  const learned = speakers.learnVoice(voices.map((v) => ({ ...v })), 'petra', [0, 0, 1], 10);
+  const petra = learned.find((v) => v.name === 'Petra');
+  assert.equal(petra.seconds, 40);
+  assert.ok(petra.embedding[0] > petra.embedding[2], 'weighted towards the longer history');
+  assert.ok(Math.abs(Math.hypot(...petra.embedding) - 1) < 1e-9, 'unit length');
+  assert.equal(speakers.learnVoice([], 'Karel', [0, 1], 5)[0].name, 'Karel');
+});
+
+test('speakers are listed per note and renamed in its transcript only', () => {
+  const file = path.join(TMP, 'speakers.md');
+  const turns = [
+    { start: 1, end: 4, speaker: 'Já', text: 'Začneme.' },
+    { start: 5, end: 20, speaker: 'Mluvčí 1', text: 'Mluvčí 2 to ví nejlíp, já jen krátce.' },
+    { start: 21, end: 30, speaker: 'Mluvčí 2', text: 'Import je hotový.' },
+    { start: 31, end: 40, speaker: 'Mluvčí 1', text: 'Díky.' },
+  ];
+  notes.writeNote(file, { startedAt: new Date(2026, 8, 30, 9, 0), durationSec: 60, turns, summary: { provider: 'x', notes: { title: 'Mluvčí 1 a spol.', summary: ['a'], decisions: [], action_items: [] } } });
+  const info = notes.noteSpeakers(file);
+  assert.equal(info.voices, true);
+  assert.deepEqual(info.speakers.map((s) => [s.label, s.turns]), [['Já', 1], ['Mluvčí 1', 2], ['Mluvčí 2', 1]]);
+  assert.equal(info.speakers[1].sample, 'Mluvčí 2 to ví nejlíp, já jen krátce.');
+  assert.equal(info.speakers[1].sampleStart, 5);
+
+  const applied = notes.renameSpeakers(file, { 'Mluvčí 1': 'Petra: *Nováková*', 'Mluvčí 2': 'Petra Nováková', Já: 'Já' });
+  assert.deepEqual(applied, { 'Mluvčí 1': 'Petra Nováková', 'Mluvčí 2': 'Petra Nováková' });
+  const md = fs.readFileSync(file, 'utf8');
+  assert.match(md, /^# Mluvčí 1 a spol\.$/m, 'the header is not touched');
+  assert.match(md, /Mluvčí 2 to ví nejlíp/, 'nor the spoken text');
+  assert.deepEqual(notes.readNote(file).turns.map((t) => t.speaker), ['Já', 'Petra Nováková', 'Petra Nováková', 'Petra Nováková']);
+  assert.equal(notes.noteSpeakers(path.join(TMP, 'done.md')).voices, false);
+});
+
+test('summary prompt explains recognised and unknown voices', () => {
+  const p = summarize.systemPrompt({ myName: 'Michal', labelled: true, speakers: ['Já', 'Petra', 'Mluvčí 1'] });
+  assert.match(p, /Speaker labels come from voice recognition/);
+  assert.match(p, /"Petra" is a participant recognised by name/);
+  assert.match(p, /Labels like "Mluvčí 1" \(Czech for "speaker 1"\) are distinct voices/);
+  assert.match(summarize.systemPrompt({ labelled: true, speakers: ['Já', 'Ostatní'] }), /captured by their microphone/);
+});

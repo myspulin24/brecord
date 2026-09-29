@@ -69,6 +69,8 @@ const DEFAULT_SETTINGS = {
     groq: { model: 'openai/gpt-oss-120b' },
   },
   // Features still being tested; shown greyed out in Settings → Experimental.
+  // Voice-based speaker labels (speakers.js); models download on first use.
+  speakers: { enabled: true },
   experimental: {
     // Cloud Whisper transcription and API-key summaries (Anthropic, OpenAI, Groq).
     cloudApis: false,

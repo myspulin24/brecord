@@ -110,7 +110,9 @@ async function transcribeLocal(file, cfg, { onProgress, signal }) {
   const threads = t.threads > 0 ? t.threads : Math.max(1, Math.min(8, os.cpus().length - 1));
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'minutes-whisper-'));
   const outBase = path.join(tmp, 'transcript');
-  const args = ['-m', w.model, '-f', file, '-l', t.language || 'auto', '-t', String(threads), '-oj', '-of', outBase, '-pp'];
+  // Short segments (split between words) let speaker labels change where
+  // the voice does; mergeTurns joins them back into paragraphs.
+  const args = ['-m', w.model, '-f', file, '-l', t.language || 'auto', '-t', String(threads), '-oj', '-of', outBase, '-pp', '-ml', '40', '-sow'];
   const prompt = whisperPrompt(parseGlossary(t.prompt));
   if (prompt) {
     args.push('--prompt', prompt);

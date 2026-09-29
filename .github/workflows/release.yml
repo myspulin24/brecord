@@ -155,6 +155,15 @@ jobs:
       - name: Instalace závislostí
         run: npm ci
 
+      # npm nainstaluje nativní knihovnu mluvčích jen pro architekturu stroje;
+      # macOS se staví pro Apple Silicon i Intel, tak musí mít obě.
+      - name: Knihovna mluvčích pro obě architektury (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          v=$(node -p "require('sherpa-onnx-node/package.json').version")
+          npm install --no-save --force "sherpa-onnx-darwin-arm64@$v" "sherpa-onnx-darwin-x64@$v"
+          ls node_modules | grep sherpa-onnx-darwin
+
       - name: Sestavit instalátory
         run: npm run ${{ matrix.dist }}
 
@@ -170,6 +179,16 @@ jobs:
       - name: Smoke test (virtuální displej)
         if: runner.os == 'Linux'
         run: xvfb-run --auto-servernum npm run smoke
+
+      # Rozpoznání mluvčích v sestavené aplikaci: pomocný proces z app.asar,
+      # nativní knihovna vedle něj a modely (35 MB z GitHubu). Nic nehraje.
+      - name: Rozpoznání mluvčích
+        if: runner.os != 'Linux'
+        run: npm run smoke:speakers
+
+      - name: Rozpoznání mluvčích (virtuální displej)
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum npm run smoke:speakers
 
       # Přes API a id konceptu: `gh release upload` hledá vydání podle tagu,
       # a koncepty přes tag dohledat nejde. Soubor stejného jména (opakovaný

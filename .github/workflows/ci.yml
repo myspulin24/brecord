@@ -84,12 +84,13 @@ jobs:
       - name: espeak-ng
         run: sudo apt-get update && sudo apt-get install -y espeak-ng
 
-      # whisper.cpp a model tiny (75 MB) se stahují z GitHubu a Hugging Face.
-      # V mezipaměti je to rychlejší a test nespadne na výpadku cizí služby.
+      # whisper.cpp, model tiny (75 MB) a modely pro rozpoznání mluvčích se
+      # stahují z GitHubu a Hugging Face. V mezipaměti je to rychlejší a test
+      # nespadne na výpadku cizí služby.
       - uses: actions/cache@v6
         with:
           path: ~/.brecord-e2e
-          key: e2e-whisper-tiny-${{ runner.os }}-v1
+          key: e2e-whisper-tiny-speakers-${{ runner.os }}-v2
 
       - name: Instalace závislostí
         run: npm ci
@@ -137,6 +138,16 @@ jobs:
       - name: Smoke test (virtuální displej)
         if: runner.os == 'Linux'
         run: xvfb-run --auto-servernum npm run smoke
+
+      # Rozpoznání mluvčích v sestavené aplikaci: pomocný proces z app.asar,
+      # nativní knihovna vedle něj a modely (35 MB z GitHubu). Nic nehraje.
+      - name: Rozpoznání mluvčích
+        if: runner.os != 'Linux'
+        run: npm run smoke:speakers
+
+      - name: Rozpoznání mluvčích (virtuální displej)
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum npm run smoke:speakers
 
       - name: Snímky obrazovek
         if: always()

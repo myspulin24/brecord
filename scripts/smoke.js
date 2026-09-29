@@ -15,7 +15,7 @@ const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
 const DIST = path.join(ROOT, 'dist');
 const OUT = path.join(ROOT, 'smoke-output');
-const SCENES = ['onboarding-0', 'onboarding-1', 'home', 'home-recording', 'home-processing', 'notes', 'notes-tasks', 'notes-issue', 'ai', 'transcription', 'audio', 'general', 'general-update', 'experimental', 'update-offer'];
+const SCENES = ['onboarding-0', 'onboarding-1', 'home', 'home-recording', 'home-processing', 'notes', 'notes-tasks', 'notes-issue', 'notes-speakers', 'ai', 'transcription', 'audio', 'general', 'general-update', 'experimental', 'update-offer'];
 const TIMEOUT_MS = 4 * 60 * 1000;
 
 function findApp() {
@@ -76,7 +76,11 @@ function main() {
 function seedNotes(dir) {
   const notes = require('../src/core/notes');
   fs.mkdirSync(dir, { recursive: true });
-  const turns = [{ start: 1, end: 4, speaker: 'Já', text: 'Tak začneme.' }];
+  const turns = [
+    { start: 1, end: 4, speaker: 'Já', text: 'Tak začneme. Co je nového s webem?' },
+    { start: 5, end: 14, speaker: 'Petra', text: 'Web je hotový, spouštíme čtrnáctého října.' },
+    { start: 15, end: 22, speaker: 'Mluvčí 1', text: 'Pokladnu ještě musíme otestovat, zabere to asi dva dny.' },
+  ];
   const items = [{ owner: 'Petra', task: 'Připravit tiskovou zprávu', due: 'pátek' }, { owner: 'Já', task: 'Aktualizovat ceník', due: '' }];
   const file = path.join(dir, '2026-09-26-0930.md');
   notes.writeNote(file, { startedAt: new Date(2026, 8, 26, 9, 30), durationSec: 1800, turns, summary: { provider: 'Claude Code', notes: { title: 'Plánování vydání', summary: ['Web se spustí 14. října.'], decisions: [], action_items: items } } });
@@ -91,8 +95,12 @@ function fail(message, output) {
   process.exit(1);
 }
 
-try {
-  main();
-} catch (err) {
-  fail(err.message);
+if (require.main === module) {
+  try {
+    main();
+  } catch (err) {
+    fail(err.message);
+  }
 }
+
+module.exports = { findApp };

@@ -5,7 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const { writeFileAtomic } = require('./config');
-const { markdownToTurns, turnsToMarkdown } = require('./transcript');
+const { ME, THEM, markdownToTurns, turnsToMarkdown } = require('./transcript');
 
 // Marks a note whose summary hasn't been written yet, so an interrupted
 // run can be resumed on the next launch.
@@ -231,6 +231,58 @@ function updateTask(file, op) {
   return readTasks(file);
 }
 
+// Who speaks in a note's transcript: per label the number of turns, roughly
+// how long they spoke and their longest turn (quoted, and where to play it).
+function noteSpeakers(file) {
+  const md = readText(file).replace(/\r\n/g, '\n');
+  const parts = splitNote(md);
+  const turns = parts ? markdownToTurns(parts.body) : [];
+  const byLabel = new Map();
+  turns.forEach((t, i) => {
+    if (!t.speaker) return;
+    const next = turns[i + 1];
+    // Transcript lines keep only the start; the next one bounds the length.
+    const seconds = Math.max(1, Math.min(90, (next ? next.start : t.start + 15) - t.start));
+    const entry = byLabel.get(t.speaker) || { label: t.speaker, turns: 0, seconds: 0, sample: '', sampleStart: 0, sampleSeconds: 0 };
+    entry.turns += 1;
+    entry.seconds += seconds;
+    if (t.text.length > entry.sample.length) {
+      entry.sample = t.text;
+      entry.sampleStart = t.start;
+      entry.sampleSeconds = seconds;
+    }
+    byLabel.set(t.speaker, entry);
+  });
+  const speakers = [...byLabel.values()].map((e) => ({ ...e, sample: e.sample.length > 220 ? `${e.sample.slice(0, 217).trimEnd()}…` : e.sample }));
+  return { speakers, voices: speakers.some((sp) => sp.label !== ME && sp.label !== THEM) };
+}
+
+const SPEAKER_LINE = /^(\*\*\[\d{1,2}:\d{2}:\d{2}\]) ([^:*]+):\*\*/;
+const speakerName = (name) => oneLine(name, 60).replace(/[:*[\]]/g, '').trim();
+
+// Renames speakers in the transcript ({ "Mluvčí 2": "Petra" }); two labels
+// given the same name become one person. Returns the names actually applied.
+function renameSpeakers(file, mapping) {
+  const rename = new Map();
+  for (const [from, to] of Object.entries(mapping || {})) {
+    const name = speakerName(to);
+    if (name && name !== from) rename.set(from, name);
+  }
+  if (!rename.size) return {};
+  const original = readText(file);
+  const eol = original.includes('\r\n') ? '\r\n' : '\n';
+  const md = original.replace(/\r\n/g, '\n');
+  const start = transcriptStart(md);
+  if (start < 0) throw new Error(`${path.basename(file)} neobsahuje přepis`);
+  const body = md
+    .slice(start)
+    .split('\n')
+    .map((line) => line.replace(SPEAKER_LINE, (all, stamp, label) => (rename.has(label) ? `${stamp} ${rename.get(label)}:**` : all)))
+    .join('\n');
+  writeFileAtomic(file, (md.slice(0, start) + body).replace(/\n/g, eol));
+  return Object.fromEntries(rename);
+}
+
 // The reason a failed note gives, without the Markdown quote around it.
 function noteIssue(md) {
   const m = md.match(/^> ⚠️ \*\*(?:Přepis se nepodařil|Shrnutí se nepodařilo|Transcription failed|Summary failed)\.?\*\* ?(.*(?:\n> .+)*)/m);
@@ -306,4 +358,4 @@ function listNotes(dir, { limit = 200 } = {}) {
   return items.slice(0, limit);
 }
 
-module.exports = { BASE_NAME, PENDING_MARKER, allocateBaseName, dateFromBaseName, formatDuration, listNotes, noteIssue, parseTasks, readNote, readTasks, renderNote, taskKey, updateTask, writeNote };
+module.exports = { BASE_NAME, PENDING_MARKER, allocateBaseName, dateFromBaseName, formatDuration, listNotes, noteIssue, noteSpeakers, parseTasks, readNote, readTasks, renameSpeakers, renderNote, speakerName, taskKey, updateTask, writeNote };

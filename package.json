@@ -43,6 +43,7 @@
     "test:coverage": "node --test --experimental-test-coverage \"test/**/*.test.{js,mjs}\"",
     "e2e": "node scripts/e2e-smoke.js",
     "smoke": "node scripts/smoke.js",
+    "smoke:speakers": "node scripts/smoke-speakers.js",
     "icons": "node scripts/make-icons.js",
     "screenshots": "node scripts/screenshots.js",
     "changelog": "node scripts/changelog.mjs",
@@ -53,7 +54,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.128.0",
-    "electron-updater": "^6.8.9"
+    "electron-updater": "^6.8.9",
+    "sherpa-onnx-node": "^1.13.8"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -71,6 +73,9 @@
       "assets/**/*",
       "package.json",
       "LICENSE"
+    ],
+    "asarUnpack": [
+      "node_modules/sherpa-onnx-*/**"
     ],
     "directories": {
       "output": "dist",

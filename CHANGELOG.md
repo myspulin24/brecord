@@ -7,7 +7,21 @@ v **Nastavení → Obecné → Aktualizace**, když nabídne novou verzi. Vydán
 záznamu tady se nesestaví. Píše se pro toho, kdo aplikaci používá: co se
 změní v okně, ne které soubory se upravily. Nejnovější verze je nahoře.
 
-## 0.5.1 — nevydáno
+## 0.6.0 — nevydáno
+
+### Mluvčí
+
+- **BRecord rozliší mluvčí podle hlasu.** Místo „Ostatní“ bude v přepisu
+  Mluvčí 1, Mluvčí 2 a další. Rozpoznání běží jen ve vašem počítači; modely
+  (35 MB) se stáhnou při první nahrávce.
+- **Mluvčí pojmenujete v poznámce.** V panelu poznámky je nová záložka
+  **Mluvčí** s ukázkou, co kdo řekl, a s tlačítkem pro přehrání. Jména se
+  propíšou do přepisu a shrnutí se napíše znovu, takže úkoly dostanou
+  správné vlastníky. Dva mluvčí se stejným jménem se spojí v jednoho.
+- **BRecord si hlasy zapamatuje** a příště známé lidi pojmenuje sám.
+  Zapamatované hlasy najdete v Nastavení → Přepis a můžete je zapomenout.
+- **Starší nahrávky** jde zpracovat znovu i s rozlišením mluvčích. Když víte,
+  kolik lidí mluvilo, zadejte to; odškrtnuté úkoly zůstanou.
 
 ### Přepis a shrnutí
 

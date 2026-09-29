@@ -14,6 +14,7 @@ const store = {
   local: null,
   notes: [],
   editor: null,
+  voices: [],
   page: null,
   debug: false,
 };
@@ -386,6 +387,7 @@ function go(page) {
   }
   if (page === 'notes' || page === 'home') refreshNotes();
   if (page === 'general') refreshEditor();
+  if (page === 'transcription') refreshVoices();
   if (page === 'ai') refreshCli(true);
   if (page === 'transcription' || page === 'ai') refreshLocal();
   requestAnimationFrame(() => segmentedRegistry.forEach((p) => p()));
@@ -428,7 +430,10 @@ function applyState(s) {
   renderHome();
   renderMiniRec();
   renderDeviceLists();
-  if (sheet.note && sheet.tab === 'issues' && isRunning(sheet.note) !== sheet.running) renderSheetBody();
+  if (sheet.note && (sheet.tab === 'issues' || sheet.tab === 'speakers') && isRunning(sheet.note) !== sheet.running) {
+    sheet.running = isRunning(sheet.note);
+    if (!$('#sheet-body .speaker-form.dirty')) renderSheetBody();
+  }
   maybeOfferUpdate();
   if (s.phase === 'recording' && !clockTimer) {
     clockTimer = setInterval(tickClock, 250);
@@ -560,17 +565,17 @@ function renderHome() {
 // Rows are patched in place, keyed by file: rebuilding them on every state
 // update restarted the spinner and made the progress jump instead of glide.
 const jobRows = new Map();
-const STEP_NAMES = { transcribing: 'Přepis', summarizing: 'Shrnutí' };
+const STEP_NAMES = { transcribing: 'Přepis', speakers: 'Mluvčí', summarizing: 'Shrnutí' };
 
 function jobViews(s) {
   const views = s.jobs.map((job) => ({
     key: job.id,
     name: job.name,
     text: job.text,
-    icon: job.stage === 'queued' ? 'clock' : job.stage === 'summarizing' ? 'sparkles' : job.type === 'resummarize' ? 'redo' : 'wave',
+    icon: job.stage === 'queued' ? 'clock' : job.stage === 'summarizing' ? 'sparkles' : job.stage === 'speakers' ? 'users' : job.type === 'resummarize' ? 'redo' : 'wave',
     mode: job.stage === 'queued' ? 'idle' : job.stage === 'transcribing' && job.progress ? 'progress' : 'spin',
     progress: job.stage === 'transcribing' ? job.progress : 0,
-    steps: job.type === 'resummarize' ? ['summarizing'] : ['transcribing', 'summarizing'],
+    steps: job.type === 'resummarize' ? ['summarizing'] : store.settings.speakers && store.settings.speakers.enabled === false ? ['transcribing', 'summarizing'] : ['transcribing', 'speakers', 'summarizing'],
     stage: job.stage,
   }));
   if (s.task) views.push({ key: 'task', name: s.task, text: 'Probíhá na pozadí…', icon: 'download', mode: 'spin', progress: 0, steps: [], stage: '' });
@@ -919,7 +924,7 @@ function renderNotes() {
 }
 
 // ── Note sheet: the tasks and problems of one note ──────────────────────
-const sheet = { note: null, tab: 'tasks', tasks: null, editing: -1, running: false, draft: null, fresh: null, tabs: null, closeTimer: null };
+const sheet = { note: null, tab: 'tasks', tasks: null, speakers: null, editing: -1, running: false, draft: null, fresh: null, tabs: null, closeTimer: null };
 
 const ISSUES = {
   'summary-failed': { title: 'Shrnutí se nepodařilo', text: 'Přepis zůstal uložený. Zkontrolujte přihlášení nebo poskytovatele a nechte poznámku shrnout znovu.', action: 'Znovu shrnout', started: 'Poznámka se znovu shrnuje', page: 'ai', pageLabel: 'AI shrnutí' },
@@ -978,11 +983,14 @@ function initNoteSheet() {
     </aside>`;
   sheet.tabs = segmented($('#sheet-tabs'), [
     { value: 'tasks', label: 'Úkoly', icon: 'tasks' },
+    { value: 'speakers', label: 'Mluvčí', icon: 'users' },
     { value: 'issues', label: 'K vyřešení', icon: 'alert' },
   ], sheet.tab, (v) => {
+    stopSample();
     sheet.tab = v;
     sheet.editing = -1;
     renderSheetBody(true);
+    if (v === 'speakers') loadSheetSpeakers();
   });
   $('.sheet-backdrop', layer).addEventListener('click', closeNoteSheet);
   $('#sheet-close').addEventListener('click', closeNoteSheet);
@@ -1001,10 +1009,11 @@ async function openNoteSheet(n, tab) {
   closePopover();
   if (!sheetShows(n)) {
     sheet.tasks = null;
+    sheet.speakers = null;
     sheet.draft = { task: '', owner: store.settings.myName || '', due: '' };
   }
   sheet.note = n;
-  sheet.tab = tab === 'issues' && ISSUES[n.status] ? 'issues' : 'tasks';
+  sheet.tab = tab === 'issues' && ISSUES[n.status] ? 'issues' : tab === 'speakers' ? 'speakers' : 'tasks';
   sheet.editing = -1;
   const layer = $('#note-sheet');
   clearTimeout(sheet.closeTimer);
@@ -1018,10 +1027,11 @@ async function openNoteSheet(n, tab) {
     sheet.tabs.place();
   });
   $('#sheet-close').focus({ preventScroll: true });
-  await loadSheetTasks();
+  await Promise.all([loadSheetTasks(), loadSheetSpeakers()]);
 }
 
 function closeNoteSheet() {
+  stopSample();
   if (!sheet.note) return;
   sheet.note = null;
   const layer = $('#note-sheet');
@@ -1068,7 +1078,10 @@ function syncNoteSheet() {
   } else if (changed) {
     renderSheetBody(true);
   }
-  if (modified) loadSheetTasks();
+  if (modified) {
+    loadSheetTasks();
+    loadSheetSpeakers();
+  }
 }
 
 function renderSheetHead() {
@@ -1079,7 +1092,8 @@ function renderSheetHead() {
   ic.innerHTML = icon(st.icon, 19);
   $('#sheet-title').textContent = n.title;
   $('#sheet-sub').textContent = [fmtDay(n.startedAt), fmtTime(n.startedAt), n.durationSec ? fmtDuration(n.durationSec) : null].filter(Boolean).join(' · ');
-  $('#sheet-tabs-wrap').hidden = !ISSUES[n.status];
+  $('#sheet-tabs .seg-btn[data-value="issues"]').hidden = !ISSUES[n.status];
+  requestAnimationFrame(() => sheet.tabs && sheet.tabs.place());
   $('#sheet-open-label').textContent = editorName() ? `Otevřít v ${editorName()}` : 'Otevřít poznámku';
 }
 
@@ -1095,6 +1109,7 @@ function renderSheetBody(enter = false) {
   }
   if (!sheet.note) return;
   if (sheet.tab === 'issues' && ISSUES[sheet.note.status]) renderIssue(body);
+  else if (sheet.tab === 'speakers') renderSpeakers(body);
   else renderTasks(body);
 }
 
@@ -1357,6 +1372,256 @@ function renderIssue(body) {
   actions.append(run, settingsBtn);
   card.append(actions);
   body.append(card);
+}
+
+// ── Speakers of a note ───────────────────────────────────────────────────
+let player = null;
+
+// file:///C:/Users/… with each path segment encoded (#, ? and spaces).
+function fileUrl(p) {
+  const parts = p.replace(/\\/g, '/').split('/');
+  return `file:///${parts.map((seg, i) => (i === 0 && /^[A-Za-z]:$/.test(seg) ? seg : encodeURIComponent(seg))).join('/').replace(/^\/+/, '')}`;
+}
+
+function stopSample() {
+  if (!player) return;
+  player.audio.pause();
+  player.audio.removeAttribute('src');
+  player.btn.classList.remove('playing');
+  player.btn.innerHTML = icon('play', 14);
+  player = null;
+}
+
+// A few seconds of the speaker's longest turn, to tell who it is.
+function playSample(sp, btn) {
+  const same = player && player.btn === btn;
+  stopSample();
+  if (same || !sheet.speakers || !sheet.speakers.audio) return;
+  const audio = new Audio(fileUrl(sheet.speakers.audio));
+  const stopAt = sp.sampleStart + Math.min(10, Math.max(3, sp.sampleSeconds));
+  audio.addEventListener('loadedmetadata', () => {
+    audio.currentTime = sp.sampleStart;
+    audio.play().catch(() => stopSample());
+  }, { once: true });
+  audio.addEventListener('timeupdate', () => audio.currentTime >= stopAt && stopSample());
+  audio.addEventListener('error', () => {
+    stopSample();
+    toast('Nahrávku se nepodařilo přehrát', 'error');
+  });
+  player = { audio, btn };
+  btn.classList.add('playing');
+  btn.innerHTML = icon('stop', 14);
+}
+
+async function loadSheetSpeakers() {
+  const n = sheet.note;
+  if (!n) return;
+  let info;
+  try {
+    info = await api.noteSpeakers(n.file);
+  } catch (err) {
+    info = { speakers: [], voices: false, audio: null };
+    toast(errText(err), 'error');
+  }
+  if (!sheetShows(n)) return;
+  const first = !sheet.speakers;
+  sheet.speakers = info;
+  if (sheet.tab === 'speakers' && !$('#sheet-body .speaker-form.dirty')) renderSheetBody(first);
+}
+
+function speakerCount(value, onChange) {
+  const wrap = el('div', 'segmented small');
+  segmentedOnce(wrap, [{ value: 0, label: 'Automaticky' }, ...[2, 3, 4, 5, 6].map((v) => ({ value: v, label: String(v) }))], value, onChange);
+  return wrap;
+}
+
+// segmented() remembers every control for re-layout on resize; the sheet
+// redraws its body often, so drop the ones that left the page.
+function segmentedOnce(root, options, value, onChange) {
+  const ctl = segmented(root, options, value, onChange);
+  for (const place of [...segmentedRegistry]) if (place !== ctl.place && place.root && !place.root.isConnected) segmentedRegistry.delete(place);
+  ctl.place.root = root;
+  return ctl;
+}
+
+function rerunSpeakers(n, count, button) {
+  button.disabled = true;
+  api.reprocessNote(n.file, { numSpeakers: count }).then(
+    () => {
+      toast('Nahrávka se zpracuje znovu, i s rozlišením mluvčích');
+      renderSheetBody();
+    },
+    (err) => {
+      button.disabled = false;
+      toast(errText(err), 'error');
+    },
+  );
+}
+
+function renderSpeakers(body) {
+  const n = sheet.note;
+  const info = sheet.speakers;
+  if (!info) return;
+  const running = isRunning(n);
+  const enabled = store.settings.speakers && store.settings.speakers.enabled !== false;
+  let count = 0;
+
+  if (!info.voices) {
+    const box = el('div', 'speakers-empty');
+    const ic = el('div', 'empty-icon');
+    ic.innerHTML = icon('users', 26);
+    box.append(ic, el('div', 'empty-title', 'Mluvčí zatím nejsou rozlišení'));
+    box.append(el('p', 'empty-text', 'Tahle poznámka zná jen „Já“ a „Ostatní“. BRecord může nahrávku zpracovat znovu a rozlišit jednotlivé hlasy. Přepis i shrnutí se napíšou znovu, odškrtnuté úkoly zůstanou.'));
+    const row = el('div', 'speakers-rerun');
+    row.append(el('span', 'speakers-rerun-label', 'Kolik lidí mluvilo'), speakerCount(0, (v) => (count = Number(v))));
+    box.append(row);
+    const go = el('button', 'btn btn-primary');
+    go.type = 'button';
+    go.innerHTML = icon(running ? 'refresh' : 'users', 16);
+    go.append(el('span', '', running ? 'Zpracovává se…' : 'Rozpoznat mluvčí'));
+    go.classList.toggle('is-loading', running);
+    go.disabled = running || !info.audio || !enabled;
+    go.addEventListener('click', () => rerunSpeakers(n, count, go));
+    box.append(go);
+    if (!info.audio) box.append(el('p', 'speakers-note', 'Nahrávka k této poznámce už ve složce není.'));
+    else if (!enabled) box.append(el('p', 'speakers-note', 'Rozlišování mluvčích je vypnuté v Nastavení → Přepis.'));
+    body.append(box);
+    return;
+  }
+
+  body.append(el('p', 'speakers-intro', 'Pojmenujte, kdo mluvil. Jména se propíšou do přepisu, shrnutí se napíše znovu a BRecord si hlasy zapamatuje, takže je příště pozná sám.'));
+  const form = el('form', 'speaker-form');
+  const listId = 'speaker-names';
+  const datalist = el('datalist');
+  datalist.id = listId;
+  const suggestions = new Set([store.settings.myName, ...(store.voices || []).map((v) => v.name), ...info.speakers.map((sp) => sp.label)].filter((x) => x && !/^Mluvčí \d+$/.test(x) && x !== 'Ostatní'));
+  for (const name of suggestions) {
+    const o = el('option');
+    o.value = name;
+    datalist.append(o);
+  }
+  const inputs = [];
+  const save = el('button', 'btn btn-primary');
+  save.type = 'submit';
+  save.innerHTML = icon('check', 16);
+  save.append(el('span', '', 'Uložit jména'));
+  save.disabled = true;
+  const dirty = () => {
+    const changed = inputs.some(({ sp, input }) => input.value.trim() && input.value.trim() !== sp.label);
+    form.classList.toggle('dirty', changed);
+    save.disabled = !changed || running;
+  };
+  info.speakers.forEach((sp, i) => {
+    const generic = /^Mluvčí \d+$/.test(sp.label) || sp.label === 'Ostatní';
+    const row = el('div', 'speaker');
+    row.style.setProperty('--i', Math.min(i, 10));
+    const avatar = el('span', `speaker-avatar${generic ? '' : ' named'}`, generic ? String(i + 1) : sp.label.trim().charAt(0).toUpperCase());
+    const main = el('div', 'speaker-main');
+    const input = el('input', 'input speaker-name');
+    input.type = 'text';
+    input.maxLength = 60;
+    input.setAttribute('list', listId);
+    input.placeholder = generic ? `${sp.label} · zadejte jméno` : sp.label;
+    input.value = generic ? '' : sp.label;
+    input.setAttribute('aria-label', `Jméno pro ${sp.label}`);
+    input.addEventListener('input', dirty);
+    inputs.push({ sp, input });
+    const meta = el('div', 'speaker-meta');
+    meta.append(el('span', '', `${sp.turns} ${plural(sp.turns, 'promluva', 'promluvy', 'promluv')} · ${fmtDuration(sp.seconds)}`));
+    if (sp.auto) meta.append(el('span', 'badge accent', 'poznáno podle hlasu'));
+    main.append(input, meta, el('div', 'speaker-sample', `„${sp.sample}“`));
+    const play = el('button', 'btn btn-soft btn-sm btn-icon speaker-play');
+    play.type = 'button';
+    play.title = 'Přehrát ukázku';
+    play.setAttribute('aria-label', `Přehrát ukázku: ${sp.label}`);
+    play.innerHTML = icon('play', 14);
+    play.disabled = !info.audio;
+    play.addEventListener('click', () => playSample(sp, play));
+    row.append(avatar, main, play);
+    form.append(row);
+  });
+  const actions = el('div', 'speaker-actions');
+  actions.append(save, el('span', 'speakers-note', 'Dva mluvčí se stejným jménem se spojí v jednoho.'));
+  form.append(datalist, actions);
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const mapping = {};
+    for (const { sp, input } of inputs) if (input.value.trim() && input.value.trim() !== sp.label) mapping[sp.label] = input.value.trim();
+    save.disabled = true;
+    try {
+      const r = await api.saveSpeakerNames(n.file, mapping);
+      toast(r.learned.length ? `Jména jsou uložená a BRecord si zapamatoval ${r.learned.length === 1 ? 'hlas' : 'hlasy'}. Shrnutí se píše znovu.` : 'Jména jsou uložená. Shrnutí se píše znovu.');
+      sheet.speakers = null;
+      form.classList.remove('dirty');
+      await loadSheetSpeakers();
+      refreshVoices();
+    } catch (err) {
+      toast(errText(err), 'error');
+      dirty();
+    }
+  });
+  body.append(form);
+
+  const again = el('div', 'speakers-again');
+  again.append(el('div', 'task-add-label', 'Nesedí to?'));
+  const row = el('div', 'speakers-rerun');
+  row.append(el('span', 'speakers-rerun-label', 'Kolik lidí mluvilo'), speakerCount(0, (v) => (count = Number(v))));
+  const redo = el('button', 'btn btn-soft btn-sm');
+  redo.type = 'button';
+  redo.innerHTML = icon('redo', 15);
+  redo.append(el('span', '', running ? 'Zpracovává se…' : 'Rozpoznat znovu'));
+  redo.disabled = running || !info.audio || !enabled;
+  redo.addEventListener('click', () => rerunSpeakers(n, count, redo));
+  row.append(redo);
+  again.append(row);
+  body.append(again);
+}
+
+// ── Speaker settings (Přepis) ────────────────────────────────────────────
+async function refreshVoices() {
+  let status;
+  try {
+    status = await api.speakersStatus();
+  } catch {
+    return;
+  }
+  store.voices = status.voices;
+  const hint = $('#speakers-hint');
+  hint.replaceChildren();
+  if (status.installed) {
+    hint.textContent = 'Místo „Ostatní“ pozná jednotlivé lidi. Modely jsou nainstalované.';
+  } else {
+    hint.append(`Místo „Ostatní“ pozná jednotlivé lidi. Modely (${status.mb} MB) se stáhnou při první nahrávce, nebo `);
+    const link = el('a', 'link', 'hned teď');
+    link.href = '#';
+    link.addEventListener('click', async (e) => {
+      e.preventDefault();
+      link.textContent = 'stahuji…';
+      const r = await api.installSpeakers();
+      if (!r.ok) toast(r.error, 'error');
+      refreshVoices();
+    });
+    hint.append(link, '.');
+  }
+  const list = $('#voice-list');
+  list.replaceChildren();
+  if (!status.voices.length) list.append(el('span', 'voice-empty', 'Zatím žádné'));
+  for (const v of status.voices) {
+    const chip = el('span', 'voice-chip');
+    chip.append(el('span', '', v.name));
+    const x = el('button', 'voice-forget');
+    x.type = 'button';
+    x.title = `Zapomenout hlas ${v.name}`;
+    x.setAttribute('aria-label', x.title);
+    x.innerHTML = icon('x', 12);
+    x.addEventListener('click', async () => {
+      await api.forgetVoice(v.name);
+      toast(`Hlas ${v.name} je zapomenutý`);
+      refreshVoices();
+    });
+    chip.append(x);
+    list.append(chip);
+  }
 }
 
 let notesTimer = null;
@@ -2058,7 +2323,7 @@ function bindInputs() {
   }
   for (const btn of $$('[data-toggle]')) {
     const key = btn.dataset.toggle;
-    setToggle(btn, store.settings[key]);
+    setToggle(btn, getPath(store.settings, key));
     btn.addEventListener('click', () => {
       const on = !btn.classList.contains('on');
       setToggle(btn, on);
@@ -2490,11 +2755,11 @@ function installDebug() {
       }
       $('#onboarding').hidden = true;
       closeNoteSheet();
-      if (name === 'notes-tasks' || name === 'notes-issue') {
+      if (name === 'notes-tasks' || name === 'notes-issue' || name === 'notes-speakers') {
         go('notes');
         refreshNotes().then(() => {
-          const n = store.notes.find((x) => (name === 'notes-tasks' ? x.tasksTotal : ISSUES[x.status]));
-          if (n) openNoteSheet(n, name === 'notes-tasks' ? 'tasks' : 'issues');
+          const n = name === 'notes-speakers' ? store.notes[0] : store.notes.find((x) => (name === 'notes-issue' ? ISSUES[x.status] : x.tasksTotal));
+          if (n) openNoteSheet(n, { 'notes-tasks': 'tasks', 'notes-issue': 'issues', 'notes-speakers': 'speakers' }[name]);
         });
         return;
       }
@@ -2715,6 +2980,7 @@ async function init() {
   refreshCli(false);
   refreshLocal();
   refreshEditor();
+  refreshVoices();
 
   api.on('state', applyState);
   api.on('settings', (s) => {
