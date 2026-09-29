@@ -281,12 +281,12 @@
                 <div id="update-body"></div>
                 <div class="divider"></div>
                 <div class="field">
-                  <div class="field-text"><div class="field-label">Kontrolovat aktualizace</div><div class="field-hint">Při spuštění a pak každé čtyři hodiny se podívá na GitHub.</div></div>
+                  <div class="field-text"><div class="field-label">Kontrolovat aktualizace</div><div class="field-hint">Při spuštění, při otevření okna a každé čtyři hodiny se podívá na GitHub.</div></div>
                   <button class="toggle" data-toggle="updateChecks"><span></span></button>
                 </div>
                 <div class="divider"></div>
                 <div class="field" id="auto-update-field">
-                  <div class="field-text"><div class="field-label">Stahovat a instalovat automaticky</div><div class="field-hint" id="auto-update-hint">Nová verze se stáhne na pozadí a nainstaluje při ukončení.</div></div>
+                  <div class="field-text"><div class="field-label">Stahovat a instalovat automaticky</div><div class="field-hint" id="auto-update-hint">Nová verze se stáhne na pozadí a BRecord vám ji nabídne k instalaci. Jinak se nainstaluje při ukončení.</div></div>
                   <button class="toggle" data-toggle="autoUpdate"><span></span></button>
                 </div>
                 <div class="about-line" id="about-line"></div>
@@ -342,6 +342,24 @@
 
     <!-- Overlays -->
     <div class="sheet-layer" id="note-sheet" hidden></div>
+    <div class="update-offer" id="update-offer" hidden>
+      <div class="offer-backdrop"></div>
+      <div class="offer-card" role="dialog" aria-modal="true" aria-labelledby="offer-title">
+        <div class="offer-head">
+          <div class="offer-mark"><div class="brand-mark"></div><span class="offer-badge"><i data-icon="download" data-size="12"></i></span></div>
+          <div class="offer-heading"><h2 id="offer-title"></h2><div class="offer-sub" id="offer-sub"></div></div>
+        </div>
+        <p class="offer-text" id="offer-text"></p>
+        <div class="offer-progress" id="offer-progress" hidden><div class="progress"><div class="progress-fill"></div></div><div class="offer-progress-text" id="offer-progress-text"></div></div>
+        <div class="offer-notes-title">Co je nového</div>
+        <div class="offer-notes-scroll" id="offer-notes"></div>
+        <div class="offer-actions">
+          <button class="btn btn-primary" type="button" id="offer-primary"></button>
+          <button class="btn btn-ghost" type="button" id="offer-later">Později</button>
+        </div>
+        <div class="offer-hint" id="offer-later-hint"></div>
+      </div>
+    </div>
     <div class="popover-layer" id="popover-layer"></div>
     <div class="toasts" id="toasts"></div>
 

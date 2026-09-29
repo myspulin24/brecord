@@ -7,6 +7,29 @@ v **Nastavení → Obecné → Aktualizace**, když nabídne novou verzi. Vydán
 záznamu tady se nesestaví. Píše se pro toho, kdo aplikaci používá: co se
 změní v okně, ne které soubory se upravily. Nejnovější verze je nahoře.
 
+## 0.5.0 — nevydáno
+
+### Aktualizace
+
+- **Nová verze se nabídne hned po spuštění.** BRecord se při spuštění
+  podívá na GitHub, novou verzi stáhne na pozadí a ukáže okno s tím, co je
+  nového. Tlačítkem **Nainstalovat a restartovat** se nainstaluje sama
+  a BRecord se znovu otevře.
+- Když zvolíte **Později**, nainstaluje se sama při ukončení BRecord.
+- Během nahrávání ani zpracování nahrávky vás nabídka nevyruší, ukáže se,
+  až bude hotovo.
+- Když BRecord běží jen v oznamovací oblasti, přijde upozornění. Kliknutím
+  se otevře okno s nabídkou.
+- Na GitHub se BRecord podívá i při otevření okna, pokud od poslední
+  kontroly uběhlo víc než půl hodiny.
+- Na macOS okno nabídne stažení ze stránky vydání, protože aplikace není
+  podepsaná certifikátem Apple a nemůže se nahradit sama.
+
+### Opravy
+
+- Poznámky k vydání se v aplikaci zobrazují jako přehledný seznam. Dřív se
+  odrážky lámaly na kousky.
+
 ## 0.4.0 — 2026-09-29
 
 ### Poznámky

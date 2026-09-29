@@ -391,6 +391,7 @@ function revealMain() {
   mainWin.show();
   mainWin.focus();
   if (IS_MAC) app.focus({ steal: true });
+  if (updater) updater.checkIfStale();
 }
 
 function showMain(page) {
@@ -887,11 +888,14 @@ async function pickAndResummarize(file) {
 function onUpdate(next) {
   const prev = state.update;
   state.update = next;
-  if (next.status !== prev.status) {
+  // An open window offers the update itself; from the tray it takes a
+  // notification, and clicking it opens the window with the offer.
+  const windowShown = alive(mainWin) && mainWin.isVisible() && !mainWin.isMinimized();
+  if (next.status !== prev.status && !windowShown) {
     if (next.status === 'ready') {
-      notify(`Aktualizace BRecord ${next.version} je připravená`, 'Nainstaluje se při ukončení aplikace, nebo hned z menu.', () => showMain('general'));
+      notify(`BRecord ${next.version} je připravený k instalaci`, 'Klikněte a nainstalujte ho. Jinak se nainstaluje sám při ukončení.', () => showMain());
     } else if (next.status === 'available' && next.mode === 'manual') {
-      notify(`Je k dispozici BRecord ${next.version}`, 'Klikněte pro stažení nové verze.', () => shell.openExternal(next.releaseUrl));
+      notify(`Je k dispozici BRecord ${next.version}`, 'Klikněte pro podrobnosti a stažení.', () => showMain());
     }
   }
   updateTray();
@@ -1117,7 +1121,7 @@ async function captureUi() {
   });
   await new Promise((r) => (wc.isLoading() ? wc.once('did-finish-load', r) : r()));
   fs.mkdirSync(SHOT_DIR, { recursive: true });
-  const scenes = (argValue('scenes') || 'onboarding-0,onboarding-1,home,home-mic,home-recording,home-processing,notes,notes-tasks,notes-issue,ai,transcription,audio,general,experimental').split(',');
+  const scenes = (argValue('scenes') || 'onboarding-0,onboarding-1,home,home-mic,home-recording,home-processing,notes,notes-tasks,notes-issue,ai,transcription,audio,general,experimental,update-offer').split(',');
   const themes = (argValue('themes') || 'dark').split(',');
   await new Promise((r) => setTimeout(r, 1500));
   for (const theme of themes) {

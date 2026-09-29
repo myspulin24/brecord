@@ -15,7 +15,7 @@ const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
 const DIST = path.join(ROOT, 'dist');
 const OUT = path.join(ROOT, 'smoke-output');
-const SCENES = ['onboarding-0', 'onboarding-1', 'home', 'home-recording', 'home-processing', 'notes', 'notes-tasks', 'notes-issue', 'ai', 'transcription', 'audio', 'general', 'general-update', 'experimental'];
+const SCENES = ['onboarding-0', 'onboarding-1', 'home', 'home-recording', 'home-processing', 'notes', 'notes-tasks', 'notes-issue', 'ai', 'transcription', 'audio', 'general', 'general-update', 'experimental', 'update-offer'];
 const TIMEOUT_MS = 4 * 60 * 1000;
 
 function findApp() {

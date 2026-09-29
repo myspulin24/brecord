@@ -9,11 +9,18 @@
 //
 // The feed is the latest published (non-draft, non-prerelease) release of
 // github.com/myspulin24/brecord, set by `build.publish` in package.json.
+//
+// GitHub is asked right after start and whenever the window is opened again
+// after a while; the window then offers the downloaded version (see the
+// update offer in ui/app.js).
 'use strict';
 
 const RELEASES_URL = 'https://github.com/myspulin24/brecord/releases';
-const FIRST_CHECK_MS = 20 * 1000;
+const FIRST_CHECK_MS = 3 * 1000;
 const CHECK_EVERY_MS = 4 * 60 * 60 * 1000;
+const STALE_MS = 30 * 60 * 1000;
+// While one of these lasts, GitHub isn't asked again.
+const BUSY = ['checking', 'downloading', 'ready'];
 
 function updateMode({ packaged, platform, env }) {
   if (!packaged) return 'dev';
@@ -22,13 +29,20 @@ function updateMode({ packaged, platform, env }) {
   return 'manual';
 }
 
-// GitHub renders release notes to HTML; the UI shows them as plain lines.
+// GitHub renders release notes to HTML; the UI shows them as plain lines:
+// a heading, then its "• " items, one per line. CHANGELOG wraps its lines at
+// 80 columns and GitHub turns every wrap into <br>, so those are spaces.
 function notesToText(notes) {
   const raw = Array.isArray(notes) ? notes.map((n) => n.note || '').join('\n') : String(notes || '');
+  // Below the rule the release page lists downloads, which the app doesn't need.
   return raw
-    .replace(/<li[^>]*>/gi, '\n• ')
-    .replace(/<\/(p|h[1-6]|li|ul|ol|div)>/gi, '\n')
-    .replace(/<br\s*\/?>/gi, '\n')
+    .split(/<hr\s*\/?>/i)[0]
+    .replace(/\s*\n\s*/g, ' ')
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<(h[1-6]|p)(\s[^>]*)?>/gi, '\n\n')
+    .replace(/<li(\s[^>]*)?>/gi, '\n• ')
+    .replace(/<\/(p|ul|ol)>/gi, '\n\n')
+    .replace(/<\/div>/gi, '\n')
     .replace(/<[^>]*>?/g, '')
     .replace(/[<>]/g, '')
     .replace(/&nbsp;/g, ' ')
@@ -37,16 +51,18 @@ function notesToText(notes) {
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/&amp;/g, '&')
-    .replace(/[ \t]+\n/g, '\n')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/ ?\n ?/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
 
-function createUpdater({ app, log, isAutoDownload, shouldAutoCheck = () => true, onChange }) {
-  const mode = updateMode({ packaged: app.isPackaged, platform: process.platform, env: process.env });
+function createUpdater({ app, log, isAutoDownload, shouldAutoCheck = () => true, onChange, platform = process.platform, env = process.env, impl }) {
+  const mode = updateMode({ packaged: app.isPackaged, platform, env });
   const state = { mode, status: mode === 'dev' ? 'unsupported' : 'idle', current: app.getVersion(), version: null, notes: '', progress: 0, error: null, checkedAt: null, releaseUrl: `${RELEASES_URL}/latest` };
   let autoUpdater = null;
   let timer = null;
+  let lastAttempt = 0;
 
   const set = (patch) => {
     Object.assign(state, patch);
@@ -54,7 +70,7 @@ function createUpdater({ app, log, isAutoDownload, shouldAutoCheck = () => true,
   };
 
   if (mode !== 'dev') {
-    ({ autoUpdater } = require('electron-updater'));
+    autoUpdater = impl || require('electron-updater').autoUpdater;
     autoUpdater.logger = { info: (m) => log('updater', m), warn: (m) => log('updater', m), error: (m) => log('updater', m), debug: () => {} };
     autoUpdater.autoDownload = false; // decided per check, see check()
     autoUpdater.autoInstallOnAppQuit = mode === 'auto';
@@ -82,7 +98,8 @@ function createUpdater({ app, log, isAutoDownload, shouldAutoCheck = () => true,
   }
 
   async function check({ manual = false } = {}) {
-    if (!autoUpdater || state.status === 'downloading' || state.status === 'ready') return { ...state };
+    if (!autoUpdater || BUSY.includes(state.status)) return { ...state };
+    lastAttempt = Date.now();
     autoUpdater.autoDownload = mode === 'auto' && isAutoDownload();
     try {
       await autoUpdater.checkForUpdates();
@@ -114,11 +131,19 @@ function createUpdater({ app, log, isAutoDownload, shouldAutoCheck = () => true,
     timer = setInterval(tick, CHECK_EVERY_MS);
   }
 
+  // The window came back after a while (BRecord lives in the tray for days):
+  // ask again, so what it shows is never hours old.
+  function checkIfStale(maxAgeMs = STALE_MS) {
+    if (!autoUpdater || !shouldAutoCheck() || BUSY.includes(state.status) || Date.now() - lastAttempt < maxAgeMs) return false;
+    check();
+    return true;
+  }
+
   function stop() {
     clearInterval(timer);
   }
 
-  return { state: () => ({ ...state }), check, download, install, start, stop };
+  return { state: () => ({ ...state }), check, checkIfStale, download, install, start, stop };
 }
 
-module.exports = { RELEASES_URL, createUpdater, notesToText, updateMode };
+module.exports = { FIRST_CHECK_MS, RELEASES_URL, STALE_MS, createUpdater, notesToText, updateMode };

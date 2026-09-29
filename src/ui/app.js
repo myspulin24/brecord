@@ -429,6 +429,7 @@ function applyState(s) {
   renderMiniRec();
   renderDeviceLists();
   if (sheet.note && sheet.tab === 'issues' && isRunning(sheet.note) !== sheet.running) renderSheetBody();
+  maybeOfferUpdate();
   if (s.phase === 'recording' && !clockTimer) {
     clockTimer = setInterval(tickClock, 250);
     tickClock();
@@ -2299,6 +2300,7 @@ async function finishOnboarding() {
   await new Promise((r) => setTimeout(r, 360));
   ob.hidden = true;
   ob.classList.remove('leaving');
+  maybeOfferUpdate();
 }
 
 function bindOnboarding() {
@@ -2325,6 +2327,157 @@ function bindOnboarding() {
   $('#ob-finish').addEventListener('click', finishOnboarding);
 }
 
+// ── Update offer ─────────────────────────────────────────────────────────
+// A downloaded version (or, where BRecord can't replace itself, an announced
+// one) is offered once per launch, as soon as the window is on screen and no
+// meeting is being recorded or processed. "Později" leaves it to the
+// installer that runs when BRecord quits.
+const offer = { version: null, dismissed: null, installWhenReady: false, closing: null };
+
+function maybeOfferUpdate() {
+  const s = store.state;
+  const u = s && s.update;
+  if (offer.version) return renderUpdateOffer();
+  if (!u || !u.version || (u.status !== 'ready' && u.status !== 'available')) return;
+  if (offer.dismissed === u.version || document.visibilityState !== 'visible' || !$('#onboarding').hidden) return;
+  if (s.phase !== 'idle' || s.jobs.length) return;
+  openUpdateOffer(u.version);
+}
+
+function openUpdateOffer(version) {
+  closePopover();
+  clearTimeout(offer.closing);
+  offer.version = version;
+  offer.installWhenReady = false;
+  const layer = $('#update-offer');
+  layer.classList.remove('leaving');
+  layer.hidden = false;
+  renderUpdateOffer();
+  $('#offer-primary').focus({ preventScroll: true });
+}
+
+function closeUpdateOffer() {
+  if (!offer.version) return;
+  offer.dismissed = offer.version;
+  offer.version = null;
+  const layer = $('#update-offer');
+  layer.classList.add('leaving');
+  offer.closing = setTimeout(() => {
+    layer.hidden = true;
+    layer.classList.remove('leaving');
+  }, 300);
+}
+
+// Release notes arrive as plain lines: "• item" bullets under section names.
+function notesList(text) {
+  const box = el('div', 'offer-notes');
+  const lines = String(text || '').split('\n').map((l) => l.trim()).filter(Boolean);
+  let list = null;
+  lines.forEach((line, i) => {
+    if (line.startsWith('• ')) {
+      if (!list) box.append((list = el('ul')));
+      list.append(el('li', '', line.slice(2)));
+      return;
+    }
+    list = null;
+    const heading = (lines[i + 1] || '').startsWith('• ');
+    box.append(el(heading ? 'div' : 'p', heading ? 'offer-notes-head' : 'offer-notes-text', line));
+  });
+  if (!box.childNodes.length) box.append(el('div', 'offer-notes-empty', 'K této verzi nejsou poznámky.'));
+  return box;
+}
+
+function renderUpdateOffer() {
+  const u = store.state.update;
+  if (!offer.version || !u) return;
+  if (!['available', 'downloading', 'ready', 'error'].includes(u.status)) return closeUpdateOffer();
+  const busy = store.state.phase !== 'idle' || store.state.jobs.length > 0;
+  const manual = u.mode === 'manual';
+  if (u.status === 'ready' && offer.installWhenReady && !busy) {
+    offer.installWhenReady = false;
+    installFromOffer();
+  }
+
+  $('#offer-title').textContent = u.status === 'ready' ? `BRecord ${u.version} je připravený` : `Je tu BRecord ${u.version}`;
+  $('#offer-sub').textContent = `Teď máte ${u.current}.`;
+  const text = {
+    ready: 'Nová verze je stažená. Instalace trvá pár sekund a BRecord se pak sám znovu otevře.',
+    downloading: 'Stahuji novou verzi. Až bude hotovo, nainstaluje se sama.',
+    available: manual
+      ? IS_MAC
+        ? 'Na macOS ji stáhnete ze stránky vydání. Aplikace není podepsaná certifikátem Apple, proto se nemůže nahradit sama.'
+        : 'Balíček .deb aktualizuje správce balíčků. Novou verzi stáhnete ze stránky vydání.'
+      : 'Stáhne se na pozadí a pak se sama nainstaluje.',
+    error: `Stažení se nepodařilo: ${u.error || 'neznámá chyba'}`,
+  }[u.status];
+  $('#offer-text').textContent = text;
+
+  const progress = $('#offer-progress');
+  progress.hidden = u.status !== 'downloading';
+  $('.progress-fill', progress).style.setProperty('--p', u.progress || 0);
+  $('#offer-progress-text').textContent = `Stahuji ${Math.round((u.progress || 0) * 100)} %`;
+
+  const notes = $('#offer-notes');
+  if (notes.dataset.version !== u.version) {
+    notes.dataset.version = u.version;
+    notes.replaceChildren(notesList(u.notes));
+  }
+
+  const primary = $('#offer-primary');
+  primary.classList.remove('is-loading');
+  primary.disabled = false;
+  let label;
+  let iconName;
+  if (u.status === 'ready') {
+    [label, iconName] = busy ? ['Po skončení nahrávání', 'clock'] : ['Nainstalovat a restartovat', 'refresh'];
+    primary.disabled = busy;
+  } else if (u.status === 'downloading') {
+    [label, iconName] = ['Stahuji…', 'download'];
+    primary.disabled = true;
+    primary.classList.add('is-loading');
+  } else if (manual) {
+    [label, iconName] = ['Stáhnout ze stránky vydání', 'external'];
+  } else {
+    [label, iconName] = [u.status === 'error' ? 'Zkusit znovu' : 'Stáhnout a nainstalovat', 'download'];
+  }
+  primary.innerHTML = icon(iconName, 16);
+  primary.append(el('span', '', label));
+  $('#offer-later-hint').textContent = manual ? '' : 'Když zvolíte Později, nainstaluje se při ukončení BRecord.';
+}
+
+async function installFromOffer() {
+  const primary = $('#offer-primary');
+  primary.disabled = true;
+  primary.classList.add('is-loading');
+  const r = await api.installUpdate();
+  if (r && r.ok === false) {
+    toast(r.reason, 'error');
+    renderUpdateOffer();
+  }
+}
+
+function bindUpdateOffer() {
+  $('#offer-primary').addEventListener('click', async () => {
+    const u = store.state.update;
+    if (u.status === 'ready') return installFromOffer();
+    if (u.mode === 'manual') {
+      api.openRelease(u.releaseUrl);
+      return closeUpdateOffer();
+    }
+    offer.installWhenReady = true;
+    await api.downloadUpdate();
+  });
+  $('#offer-later').addEventListener('click', closeUpdateOffer);
+  $('#update-offer .offer-backdrop').addEventListener('click', closeUpdateOffer);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && offer.version && !e.defaultPrevented) {
+      e.preventDefault();
+      closeUpdateOffer();
+    }
+  });
+  document.addEventListener('visibilitychange', maybeOfferUpdate);
+}
+
 // ── Debug scenes (screenshots only) ─────────────────────────────────────
 function installDebug() {
   window.__brecord = {
@@ -2345,7 +2498,19 @@ function installDebug() {
         });
         return;
       }
+      if (name === 'update-offer') {
+        offer.dismissed = null;
+        applyState({
+          ...store.state,
+          phase: 'idle',
+          jobs: [],
+          update: { mode: 'auto', status: 'ready', current: store.meta.version, version: '9.9.9', progress: 1, checkedAt: Date.now(), releaseUrl: '', notes: 'Poznámky\n\n• Úkoly k odškrtání přímo v aplikaci.\n• Poznámky se otevírají v Pilcrow.\n\nOpravy\n\n• Plynulý ukazatel průběhu zpracování.' },
+        });
+        return;
+      }
+      closeUpdateOffer();
       if (name === 'general-update') {
+        offer.dismissed = '9.9.9';
         applyState({
           ...store.state,
           phase: 'idle',
@@ -2454,7 +2619,7 @@ function renderUpdate(u) {
   const manual = u.mode === 'manual';
   $('#auto-update-hint').textContent = manual
     ? (IS_MAC ? 'Na macOS se nová verze stahuje ze stránky vydání (aplikace není podepsaná certifikátem Apple).' : 'Balíček .deb aktualizuje správce balíčků; BRecord vás na novou verzi upozorní.')
-    : 'Nová verze se stáhne na pozadí a nainstaluje při ukončení.';
+    : 'Nová verze se stáhne na pozadí a BRecord vám ji nabídne k instalaci. Jinak se nainstaluje při ukončení.';
   $('button', autoField).disabled = manual;
 
   const chip = $('#update-chip');
@@ -2525,6 +2690,7 @@ async function init() {
   );
   $('#notes-search').addEventListener('input', renderNotes);
   initNoteSheet();
+  bindUpdateOffer();
   // Back from Pilcrow or another editor: pick up what changed in the notes.
   window.addEventListener('focus', () => {
     if (store.page === 'notes' || store.page === 'home' || sheet.note) refreshNotes();
